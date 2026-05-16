@@ -257,6 +257,12 @@ int32_t AppleCVADetectFacesWithVision(CVPixelBufferRef pixel_buffer,
                                       size_t face_capacity,
                                       size_t* out_face_count);
 
+/** Detect normalized bottom-left face rectangles with Vision and explicit CGImagePropertyOrientation. */
+int32_t AppleCVADetectFacesWithVisionOrientation(
+    CVPixelBufferRef pixel_buffer, uint32_t cg_image_orientation,
+    AppleCVADetectedFace* out_faces, size_t face_capacity,
+    size_t* out_face_count);
+
 #ifdef __cplusplus
 }
 #endif

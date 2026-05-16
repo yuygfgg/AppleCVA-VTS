@@ -1063,10 +1063,10 @@ int32_t AppleCVATrackerProcessFrame(
     return APPLECVA_OK;
 }
 
-int32_t AppleCVADetectFacesWithVision(CVPixelBufferRef pixel_buffer,
-                                      AppleCVADetectedFace *out_faces,
-                                      size_t face_capacity,
-                                      size_t *out_face_count) {
+int32_t AppleCVADetectFacesWithVisionOrientation(
+    CVPixelBufferRef pixel_buffer, uint32_t cg_image_orientation,
+    AppleCVADetectedFace *out_faces, size_t face_capacity,
+    size_t *out_face_count) {
     if (pixel_buffer == NULL || out_face_count == NULL) {
         return APPLECVA_ERR_INVALID_ARGUMENT;
     }
@@ -1076,10 +1076,12 @@ int32_t AppleCVADetectFacesWithVision(CVPixelBufferRef pixel_buffer,
         NSError *error = nil;
         VNDetectFaceRectanglesRequest *request =
             [[VNDetectFaceRectanglesRequest alloc] init];
-        VNImageRequestHandler *handler = [[VNImageRequestHandler alloc]
-            initWithCVPixelBuffer:pixel_buffer
-                      orientation:kCGImagePropertyOrientationUp
-                          options:@{}];
+        const CGImagePropertyOrientation orientation =
+            (CGImagePropertyOrientation)cg_image_orientation;
+        VNImageRequestHandler *handler =
+            [[VNImageRequestHandler alloc] initWithCVPixelBuffer:pixel_buffer
+                                                     orientation:orientation
+                                                         options:@{}];
         if (![handler performRequests:@[ request ] error:&error]) {
             return APPLECVA_ERR_VISION_FAILED;
         }
@@ -1108,4 +1110,13 @@ int32_t AppleCVADetectFacesWithVision(CVPixelBufferRef pixel_buffer,
     }
 
     return APPLECVA_OK;
+}
+
+int32_t AppleCVADetectFacesWithVision(CVPixelBufferRef pixel_buffer,
+                                      AppleCVADetectedFace *out_faces,
+                                      size_t face_capacity,
+                                      size_t *out_face_count) {
+    return AppleCVADetectFacesWithVisionOrientation(
+        pixel_buffer, (uint32_t)kCGImagePropertyOrientationUp, out_faces,
+        face_capacity, out_face_count);
 }
