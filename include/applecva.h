@@ -95,7 +95,7 @@ typedef struct {
     bool enable_rgb_fallback_conversion;
     /** Prefer full-range NV12 (`420f`) for fallback conversion. */
     bool prefer_full_range_nv12;
-    /** Simple focal-length scale used by AppleCVAMakeDefaultCameraParameters. */
+    /** Fallback focal-length scale used by AppleCVAMakeDefaultCameraParameters. */
     float focal_scale;
     /** Lux value passed when per-frame lux is zero. */
     uint32_t default_lux_level;
@@ -199,7 +199,7 @@ typedef struct {
 /** Fill a config with conservative defaults. */
 void AppleCVAConfigInit(AppleCVAConfig* config);
 
-/** Build identity extrinsics and simple centered intrinsics for the given frame size. */
+/** Build identity extrinsics and scaled ARKit FaceTracking fallback RGB intrinsics. */
 void AppleCVAMakeDefaultCameraParameters(size_t width, size_t height,
                                          float focal_scale,
                                          AppleCVACameraParameters* params);

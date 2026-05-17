@@ -3,6 +3,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <AppKit/AppKit.h>
 #import <CoreImage/CoreImage.h>
+#import <CoreMedia/CoreMedia.h>
 #import <QuartzCore/QuartzCore.h>
 
 #include <math.h>
@@ -287,6 +288,10 @@ static NSString *status_string_for_code(int32_t status) {
         stringWithFormat:@"%s (%d)", AppleCVAStatusString(status), status];
 }
 
+static bool configured_use_full_api(void) {
+    return getenv("APPLECVA_FULL_API") != NULL;
+}
+
 static size_t configured_vision_detection_interval(void) {
     const char *value = getenv("APPLECVA_VISION_INTERVAL");
     if (value != NULL && value[0] != '\0') {
@@ -296,7 +301,50 @@ static size_t configured_vision_detection_interval(void) {
             return (size_t)parsed;
         }
     }
-    return getenv("APPLECVA_FULL_API") != NULL ? 6 : kVisionDetectionInterval;
+    return configured_use_full_api() ? 6 : kVisionDetectionInterval;
+}
+
+static bool
+copy_camera_intrinsics_from_sample_buffer(CMSampleBufferRef sample_buffer,
+                                          AppleCVACameraParameters *params) {
+    if (sample_buffer == NULL || params == NULL) {
+        return false;
+    }
+    CFTypeRef attachment = CMGetAttachment(
+        sample_buffer, kCMSampleBufferAttachmentKey_CameraIntrinsicMatrix,
+        NULL);
+    if (attachment == NULL || CFGetTypeID(attachment) != CFDataGetTypeID()) {
+        return false;
+    }
+    CFDataRef matrix_data = (CFDataRef)attachment;
+    if (CFDataGetLength(matrix_data) < (CFIndex)(sizeof(float) * 9)) {
+        return false;
+    }
+    const float *columns = (const float *)CFDataGetBytePtr(matrix_data);
+    if (columns == NULL) {
+        return false;
+    }
+
+    params->intrinsics[0] = columns[0];
+    params->intrinsics[1] = columns[3];
+    params->intrinsics[2] = columns[6];
+    params->intrinsics[3] = columns[1];
+    params->intrinsics[4] = columns[4];
+    params->intrinsics[5] = columns[7];
+    params->intrinsics[6] = columns[2];
+    params->intrinsics[7] = columns[5];
+    params->intrinsics[8] = columns[8];
+    return isfinite(params->intrinsics[0]) && params->intrinsics[0] > 0.0f &&
+           isfinite(params->intrinsics[4]) && params->intrinsics[4] > 0.0f &&
+           isfinite(params->intrinsics[8]) && params->intrinsics[8] != 0.0f;
+}
+
+static void
+update_camera_parameters_from_sample_buffer(CMSampleBufferRef sample_buffer,
+                                            size_t width, size_t height,
+                                            AppleCVACameraParameters *params) {
+    AppleCVAMakeDefaultCameraParameters(width, height, 1.0f, params);
+    (void)copy_camera_intrinsics_from_sample_buffer(sample_buffer, params);
 }
 
 @interface FaceOverlayView : NSView
@@ -817,7 +865,7 @@ static size_t configured_vision_detection_interval(void) {
     AppleCVAConfig config;
     AppleCVAConfigInit(&config);
     config.enable_rgb_fallback_conversion = true;
-    config.use_full_api = (getenv("APPLECVA_FULL_API") != NULL);
+    config.use_full_api = configured_use_full_api();
     return AppleCVATrackerCreate(&config, &_tracker);
 }
 
@@ -875,7 +923,9 @@ static size_t configured_vision_detection_interval(void) {
     }
 
     _session = [[AVCaptureSession alloc] init];
-    _session.sessionPreset = AVCaptureSessionPreset1280x720;
+    _session.sessionPreset = configured_use_full_api()
+                                 ? AVCaptureSessionPreset640x480
+                                 : AVCaptureSessionPreset1280x720;
     if ([_session canAddInput:input]) {
         [_session addInput:input];
     }
@@ -892,7 +942,6 @@ static size_t configured_vision_detection_interval(void) {
     if ([_session canAddOutput:output]) {
         [_session addOutput:output];
     }
-
     [_view updateWithPixelBuffer:NULL
                             face:NULL
                          hasFace:NO
@@ -925,10 +974,10 @@ static size_t configured_vision_detection_interval(void) {
     if (width != _cameraWidth || height != _cameraHeight) {
         _cameraWidth = width;
         _cameraHeight = height;
-        AppleCVAMakeDefaultCameraParameters(width, height, 1.0f,
-                                            &_cameraParameters);
         _detectedFaceCount = 0;
     }
+    update_camera_parameters_from_sample_buffer(sampleBuffer, width, height,
+                                                &_cameraParameters);
 
     const size_t detectionInterval = configured_vision_detection_interval();
     if ((_frameIndex % detectionInterval) == 0 || _detectedFaceCount == 0) {

@@ -22,6 +22,13 @@
 #define APPLECVA_FULL_FACE_DEFAULT_HOLD_FRAMES 15
 #define APPLECVA_FULL_FACE_MATCH_DISTANCE2 0.08f
 
+static const float kAppleCVAFaceTrackingIntrinsicsWidth = 1440.0f;
+static const float kAppleCVAFaceTrackingIntrinsicsHeight = 1080.0f;
+static const float kAppleCVAFaceTrackingIntrinsicsFx = 970.1375f;
+static const float kAppleCVAFaceTrackingIntrinsicsFy = 970.1375f;
+static const float kAppleCVAFaceTrackingIntrinsicsCx = 715.9445f;
+static const float kAppleCVAFaceTrackingIntrinsicsCy = 538.6998f;
+
 typedef const struct __CVAFaceTrackingLite *CVAFaceTrackingLiteRef;
 typedef const struct __CVAFaceTracking *CVAFaceTrackingRef;
 
@@ -101,11 +108,14 @@ typedef struct {
     CFStringRef color_meta_data;
     CFStringRef color_only;
     CFStringRef camera_color;
+    CFStringRef detected_face_angle_pitch;
     CFStringRef detected_face_angle_roll;
+    CFStringRef detected_face_angle_yaw;
     CFStringRef detected_face_face_id;
     CFStringRef detected_face_rect;
     CFStringRef detected_faces_array;
     CFStringRef extrinsics;
+    CFStringRef failure_fov_modifier;
     CFStringRef fitting_enabled;
     CFStringRef force_cpu;
     CFStringRef intrinsics;
@@ -115,6 +125,7 @@ typedef struct {
     CFStringRef network_failure_threshold_multiplier;
     CFStringRef num_tracked_faces;
     CFStringRef robust_tongue;
+    CFStringRef rgb_only;
     CFStringRef rotation;
     CFStringRef timestamp;
     CFStringRef translation;
@@ -167,6 +178,10 @@ static CFStringRef key_from_symbol(void *handle, const char *name) {
 }
 
 static NSString *ns_key(CFStringRef key) { return (__bridge NSString *)key; }
+
+static NSString *ns_key_or_literal(CFStringRef key, CFStringRef literal) {
+    return (__bridge NSString *)(key != NULL ? key : literal);
+}
 
 static void *open_applecva_framework(void) {
     return dlopen(APPLECVA_FRAMEWORK_PATH, RTLD_NOW);
@@ -294,9 +309,14 @@ static bool load_full_keys(AppleCVAFullAPI *api) {
         APPLECVA_REQUIRED_FULL_KEY(color_only, "kCVAFaceTracking_ColorOnly"),
         APPLECVA_REQUIRED_FULL_KEY(camera_color,
                                    "kCVAFaceTracking_CameraColor"),
+        APPLECVA_OPTIONAL_FULL_KEY(
+            detected_face_angle_pitch,
+            "kCVAFaceTracking_DetectedFaceAngleInfoPitch"),
         APPLECVA_REQUIRED_FULL_KEY(
             detected_face_angle_roll,
             "kCVAFaceTracking_DetectedFaceAngleInfoRoll"),
+        APPLECVA_OPTIONAL_FULL_KEY(detected_face_angle_yaw,
+                                   "kCVAFaceTracking_DetectedFaceAngleInfoYaw"),
         APPLECVA_REQUIRED_FULL_KEY(detected_face_face_id,
                                    "kCVAFaceTracking_DetectedFaceFaceID"),
         APPLECVA_REQUIRED_FULL_KEY(detected_face_rect,
@@ -304,6 +324,8 @@ static bool load_full_keys(AppleCVAFullAPI *api) {
         APPLECVA_REQUIRED_FULL_KEY(detected_faces_array,
                                    "kCVAFaceTracking_DetectedFacesArray"),
         APPLECVA_REQUIRED_FULL_KEY(extrinsics, "kCVAFaceTracking_Extrinsics"),
+        APPLECVA_OPTIONAL_FULL_KEY(failure_fov_modifier,
+                                   "kCVAFaceTracking_FailureFOVModifier"),
         APPLECVA_REQUIRED_FULL_KEY(fitting_enabled,
                                    "kCVAFaceTracking_FittingEnabled"),
         APPLECVA_REQUIRED_FULL_KEY(force_cpu, "kCVAFaceTracking_ForceCPU"),
@@ -324,6 +346,7 @@ static bool load_full_keys(AppleCVAFullAPI *api) {
                                    "kCVAFaceTracking_UseFaceDetector"),
         APPLECVA_OPTIONAL_FULL_KEY(robust_tongue,
                                    "kCVAFaceTracking_RobustTongue"),
+        APPLECVA_OPTIONAL_FULL_KEY(rgb_only, "kCVAFaceTracking_RGBOnly"),
         APPLECVA_OPTIONAL_FULL_KEY(use_tongue, "kCVAFaceTracking_UseTongue"),
     };
 #undef APPLECVA_OPTIONAL_FULL_KEY
@@ -479,10 +502,16 @@ void AppleCVAMakeDefaultCameraParameters(size_t width, size_t height,
     params->rotation[0] = 1.0f;
     params->rotation[4] = 1.0f;
     params->rotation[8] = 1.0f;
-    params->intrinsics[0] = (float)width * focal_scale;
-    params->intrinsics[4] = (float)height * focal_scale;
-    params->intrinsics[2] = ((float)width - 1.0f) * 0.5f;
-    params->intrinsics[5] = ((float)height - 1.0f) * 0.5f;
+    const float width_scale =
+        (float)width / kAppleCVAFaceTrackingIntrinsicsWidth;
+    const float height_scale =
+        (float)height / kAppleCVAFaceTrackingIntrinsicsHeight;
+    params->intrinsics[0] =
+        kAppleCVAFaceTrackingIntrinsicsFx * width_scale * focal_scale;
+    params->intrinsics[4] =
+        kAppleCVAFaceTrackingIntrinsicsFy * height_scale * focal_scale;
+    params->intrinsics[2] = kAppleCVAFaceTrackingIntrinsicsCx * width_scale;
+    params->intrinsics[5] = kAppleCVAFaceTrackingIntrinsicsCy * height_scale;
     params->intrinsics[8] = 1.0f;
 }
 
@@ -1092,21 +1121,16 @@ static void tracker_release_runtime(AppleCVATracker *tracker) {
 
 static void full_api_add_optional_tongue_options(NSMutableDictionary *options,
                                                  const AppleCVAFullKeys *keys) {
-    if (keys->use_tongue != NULL) {
-        options[ns_key(keys->use_tongue)] = @YES;
-        if (keys->robust_tongue != NULL) {
-            options[ns_key(keys->robust_tongue)] = @YES;
-        }
-    }
+    options[ns_key_or_literal(keys->robust_tongue, CFSTR("robust_tongue"))] =
+        @YES;
 }
 
 static void full_api_add_network_options(NSMutableDictionary *options,
                                          const AppleCVAFullKeys *keys) {
     NSNumber *network_failure_multiplier =
         full_api_number_from_env("APPLECVA_FULL_NETWORK_FAILURE_MULTIPLIER");
-    if (network_failure_multiplier == nil &&
-        getenv("APPLECVA_FULL_STRICT_THRESHOLDS") == NULL) {
-        network_failure_multiplier = @5.0;
+    if (network_failure_multiplier == nil) {
+        network_failure_multiplier = @1.0;
     }
     if (network_failure_multiplier != nil) {
         options[ns_key(keys->network_failure_threshold_multiplier)] =
@@ -1116,19 +1140,36 @@ static void full_api_add_network_options(NSMutableDictionary *options,
     }
 }
 
+static void full_api_add_failure_fov_options(NSMutableDictionary *options,
+                                             const AppleCVAFullKeys *keys) {
+    NSNumber *failure_fov_modifier =
+        full_api_number_from_env("APPLECVA_FULL_FAILURE_FOV_MODIFIER");
+    if (failure_fov_modifier == nil) {
+        failure_fov_modifier = @0.5;
+    }
+    options[ns_key_or_literal(keys->failure_fov_modifier,
+                              CFSTR("failure_fov_modifier"))] =
+        failure_fov_modifier;
+    trace_log("full failure fov modifier=%s",
+              failure_fov_modifier.description.UTF8String);
+}
+
+static NSNumber *full_api_num_tracked_faces_option(void) {
+    NSNumber *num_tracked_faces =
+        full_api_number_from_env("APPLECVA_FULL_NUM_TRACKED_FACES");
+    return num_tracked_faces != nil ? num_tracked_faces : @1;
+}
+
 static NSMutableDictionary *
 full_api_create_options(const AppleCVAFullKeys *keys) {
     NSMutableDictionary *options = [@{
-        ns_key(keys->color_only) : @YES,
-        ns_key(keys->fitting_enabled) : @YES,
-        ns_key(keys->add_keypoints) : @YES,
-        ns_key(keys->add_mesh) : @YES,
-        ns_key(keys->num_tracked_faces) : @3,
-        ns_key(keys->use_face_detector) : @NO,
-        ns_key(keys->force_cpu) : @NO,
+        ns_key_or_literal(keys->rgb_only, CFSTR("rgb_only")) : @YES,
+        ns_key(keys->num_tracked_faces) : full_api_num_tracked_faces_option(),
     } mutableCopy];
     full_api_add_optional_tongue_options(options, keys);
     full_api_add_network_options(options, keys);
+    full_api_add_failure_fov_options(options, keys);
+    trace_log("full create options=%s", options.description.UTF8String);
     return options;
 }
 
@@ -1561,7 +1602,7 @@ full_api_detected_faces_array(const AppleCVAFullKeys *keys,
         [array addObject:@{
             ns_key(keys->detected_face_rect) : rect_dictionary,
             ns_key(keys->detected_face_angle_roll) : @(face->roll),
-            ns_key(keys->detected_face_face_id) : @(i + 1),
+            ns_key(keys->detected_face_face_id) : @(i),
         }];
     }
     return array;
@@ -1592,7 +1633,7 @@ process_frame_full_api(AppleCVATracker *tracker, CVPixelBufferRef input_buffer,
       dispatch_semaphore_signal(semaphore);
     };
 
-    NSDictionary *input = @{
+    NSMutableDictionary *input = [@{
         ns_key(keys->color) : (__bridge id)input_buffer,
         ns_key(keys->camera_color) : camera,
         ns_key(keys->color_meta_data) : @{
@@ -1604,7 +1645,7 @@ process_frame_full_api(AppleCVATracker *tracker, CVPixelBufferRef input_buffer,
         ns_key(keys->timestamp) : full_api_time_dictionary(timestamp_seconds),
         ns_key(keys->detected_faces_array) : faces,
         ns_key(keys->callback) : [callback copy],
-    };
+    } mutableCopy];
 
     const int32_t status = tracker->full_api.process(
         tracker->full_tracker, (__bridge CFDictionaryRef)input);
