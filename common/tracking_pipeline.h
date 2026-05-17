@@ -37,4 +37,4 @@ typedef void (^AppleCVATrackingPipelineFrameHandler)(
 
 @end
 
-#endif
+#endif // COMMON_TRACKING_PIPELINE_H

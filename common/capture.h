@@ -9,7 +9,7 @@
 
 #ifdef __cplusplus
 extern "C" {
-#endif
+#endif // __cplusplus
 
 bool AppleCVACaptureCopyCameraIntrinsicsFromSampleBuffer(
     CMSampleBufferRef sample_buffer, AppleCVACameraParameters* params);
@@ -20,6 +20,6 @@ void AppleCVACaptureUpdateCameraParametersFromSampleBuffer(
 
 #ifdef __cplusplus
 }
-#endif
+#endif //__cplusplus
 
-#endif
+#endif // COMMON_CAPTURE_H

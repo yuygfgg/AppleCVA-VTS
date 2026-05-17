@@ -36,6 +36,10 @@ typedef struct {
     float browRightYNeutral;
 } VTSAppleCVACalibration;
 
+#ifdef __cplusplus
+extern "C" {
+#endif // __cplusplus
+
 void VTSAppleCVACalibrationInit(VTSAppleCVACalibration *calibration);
 BOOL VTSAppleCVAObservedValuesFromFace(const AppleCVATrackedFace *face,
                                        BOOL faceFound,
@@ -55,4 +59,8 @@ NSArray<NSDictionary *> *VTSAppleCVAParameterValues(
     const VTSAppleCVACalibration *calibration, BOOL includeCustomParameters,
     BOOL includeARKitAliases, BOOL includeACVABlendshapeParameters);
 
-#endif
+#ifdef __cplusplus
+}
+#endif // __cplusplus
+
+#endif // VTS_SOURCE_PARAMETERS_H

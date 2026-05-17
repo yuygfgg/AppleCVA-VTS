@@ -20,4 +20,4 @@
 
 @end
 
-#endif
+#endif // VTS_SOURCE_CALIBRATION_H

@@ -7,7 +7,7 @@
 
 #ifdef __cplusplus
 extern "C" {
-#endif
+#endif // __cplusplus
 
 typedef struct {
     bool initialized;
@@ -68,6 +68,6 @@ void AppleCVAFaceOneEuroFilterApplyWithParameters(
 
 #ifdef __cplusplus
 }
-#endif
+#endif // __cplusplus
 
-#endif
+#endif // COMMON_TRACKING_UTILS_H

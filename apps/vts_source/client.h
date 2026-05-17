@@ -25,4 +25,4 @@
 
 @end
 
-#endif
+#endif // VTS_SOURCE_CLIENT_H

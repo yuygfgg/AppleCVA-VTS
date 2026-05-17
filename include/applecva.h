@@ -9,7 +9,7 @@
 
 #ifdef __cplusplus
 extern "C" {
-#endif
+#endif // __cplusplus
 
 /** Status codes returned by the AppleCVA wrapper API. */
 enum {
@@ -256,6 +256,6 @@ int32_t AppleCVADetectFacesWithVisionOrientation(
 
 #ifdef __cplusplus
 }
-#endif
+#endif // __cplusplus
 
-#endif
+#endif // APPLECVA_H

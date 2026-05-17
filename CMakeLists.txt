@@ -1,9 +1,30 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(AppleCVAVTSSource VERSION 0.1.0 LANGUAGES OBJC)
+if(APPLE AND NOT CMAKE_OSX_SYSROOT)
+    execute_process(
+        COMMAND xcrun --sdk macosx --show-sdk-path
+        OUTPUT_VARIABLE APPLECVA_MACOS_SDK
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    if(APPLECVA_MACOS_SDK)
+        set(CMAKE_OSX_SYSROOT "${APPLECVA_MACOS_SDK}"
+            CACHE PATH "macOS SDK used for AppleCVA builds" FORCE)
+    endif()
+endif()
+
+project(AppleCVAVTSSource VERSION 0.1.0 LANGUAGES C CXX OBJC OBJCXX)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_MACOSX_RPATH ON)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2)
+qt_standard_project_setup(REQUIRES 6.5)
+
+set_source_files_properties(apps/vts_source/qml/Main.qml
+    PROPERTIES
+        QT_RESOURCE_ALIAS Main.qml)
 
 set(APPLECVA_APP_NAME "AppleCVA VTS Source")
 set(APPLECVA_BUNDLE_IDENTIFIER "local.applecva.vts-source")
@@ -20,9 +41,7 @@ set(APPLECVA_FRAMEWORKS
     ImageIO)
 
 set(VTS_SOURCE_FRAMEWORKS
-    AppKit
     AVFoundation
-    CoreImage
     QuartzCore)
 
 function(target_link_apple_frameworks target visibility)
@@ -52,30 +71,47 @@ set_target_properties(applecva
         OUTPUT_NAME applecva
         INSTALL_NAME_DIR "@rpath")
 
-add_executable(vts_source
+qt_add_executable(vts_source
+    MACOSX_BUNDLE
     common/capture.m
     common/tracking_utils.m
     common/tracking_pipeline.m
-    common/overlay_view.m
-    apps/vts_source/main.m
-    apps/vts_source/app_delegate.m
+    apps/vts_source/qt/main.cpp
+    apps/vts_source/qt/controller.h
+    apps/vts_source/qt/controller.mm
+    apps/vts_source/qt/preview_item.h
+    apps/vts_source/qt/preview_item.cpp
     apps/vts_source/calibration.m
     apps/vts_source/client.m
     apps/vts_source/parameters.m)
+
+qt_add_qml_module(vts_source
+    URI AppleCVAVTSSource
+    VERSION 1.0
+    RESOURCE_PREFIX /qt/qml
+    QML_FILES
+        apps/vts_source/qml/Main.qml)
 
 target_include_directories(vts_source
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/common
-        ${CMAKE_CURRENT_SOURCE_DIR}/apps/vts_source)
+        ${CMAKE_CURRENT_SOURCE_DIR}/apps/vts_source
+        ${CMAKE_CURRENT_SOURCE_DIR}/apps/vts_source/qt)
 
 target_compile_options(vts_source
     PRIVATE
         -Wall
         -Wextra
-        -fobjc-arc)
+        $<$<COMPILE_LANGUAGE:OBJC,OBJCXX>:-fobjc-arc>)
 
-target_link_libraries(vts_source PRIVATE applecva)
+target_link_libraries(vts_source PRIVATE
+    applecva
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Qml
+    Qt6::Quick
+    Qt6::QuickControls2)
 target_link_apple_frameworks(vts_source
     PRIVATE
         ${APPLECVA_FRAMEWORKS}
