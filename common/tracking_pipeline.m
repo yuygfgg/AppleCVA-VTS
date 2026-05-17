@@ -15,6 +15,7 @@ static const uint32_t kAppleCVAPipelineVisionOrientation = 1;
     AVCaptureVideoDataOutputSampleBufferDelegate>
 @property(nonatomic, readwrite, assign) BOOL running;
 @property(nonatomic, readwrite, assign) BOOL useFullBackend;
+@property(nonatomic, readwrite, strong) AVCaptureDevice *captureDevice;
 @end
 
 @implementation AppleCVATrackingPipeline {
@@ -42,9 +43,18 @@ static const uint32_t kAppleCVAPipelineVisionOrientation = 1;
 
 - (instancetype)initWithFullBackend:(BOOL)useFullBackend
                   captureQueueLabel:(NSString *)captureQueueLabel {
+    return [self initWithFullBackend:useFullBackend
+                       captureDevice:nil
+                   captureQueueLabel:captureQueueLabel];
+}
+
+- (instancetype)initWithFullBackend:(BOOL)useFullBackend
+                      captureDevice:(AVCaptureDevice *)captureDevice
+                  captureQueueLabel:(NSString *)captureQueueLabel {
     self = [super init];
     if (self != nil) {
         _useFullBackend = useFullBackend;
+        _captureDevice = captureDevice;
         _useOneEuroFilter = YES;
         _oneEuroParameters = AppleCVAOneEuroParametersDefault();
         _lastAppliedOneEuroParameters = _oneEuroParameters;
@@ -111,8 +121,10 @@ static const uint32_t kAppleCVAPipelineVisionOrientation = 1;
 
 - (void)startCaptureSession {
     NSError *error = nil;
-    AVCaptureDevice *device =
-        [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
+    AVCaptureDevice *device = self.captureDevice;
+    if (device == nil) {
+        device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
+    }
     if (device == nil) {
         [self deliverStatusMessage:@"No video capture device found."
                             status:APPLECVA_OK];
@@ -157,7 +169,13 @@ static const uint32_t kAppleCVAPipelineVisionOrientation = 1;
 
     _session = session;
     self.running = YES;
-    [self deliverStatusMessage:@"Waiting for face." status:APPLECVA_OK];
+    NSString *cameraName =
+        device.localizedName.length != 0 ? device.localizedName : @"camera";
+    [self deliverStatusMessage:[NSString stringWithFormat:@"Using %@. "
+                                                          @"Waiting for "
+                                                          @"face.",
+                                                          cameraName]
+                        status:APPLECVA_OK];
     [_session startRunning];
 }
 

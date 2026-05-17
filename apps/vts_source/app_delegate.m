@@ -7,6 +7,7 @@
 #import "tracking_pipeline.h"
 #import "tracking_utils.h"
 
+#import <AVFoundation/AVFoundation.h>
 #import <Foundation/Foundation.h>
 #import <QuartzCore/QuartzCore.h>
 
@@ -41,6 +42,8 @@ static NSString *const kDefaultsFlipLandmarkYKey =
     @"vts_source.flip_landmark_y";
 static NSString *const kDefaultsTopLeftOriginKey =
     @"vts_source.top_left_origin";
+static NSString *const kDefaultsCameraUniqueIDKey =
+    @"vts_source.camera.unique_id";
 static NSString *const kDefaultsOneEuroMinCutoffKey =
     @"vts_source.one_euro.min_cutoff";
 static NSString *const kDefaultsOneEuroBetaKey = @"vts_source.one_euro.beta";
@@ -106,6 +109,26 @@ static BOOL parse_double_value(NSString *string, double *outValue) {
 
 static NSString *format_float(double value, NSUInteger fractionDigits) {
     return [NSString stringWithFormat:@"%.*f", (int)fractionDigits, value];
+}
+
+static NSArray<AVCaptureDevice *> *available_video_capture_devices(void) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    NSArray<AVCaptureDevice *> *devices =
+        [AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo];
+#pragma clang diagnostic pop
+    return devices != nil ? devices : @[];
+}
+
+static NSString *camera_title(AVCaptureDevice *device,
+                              NSString *defaultUniqueID) {
+    NSString *name =
+        device.localizedName.length != 0 ? device.localizedName : @"Camera";
+    if (defaultUniqueID.length != 0 &&
+        [device.uniqueID isEqualToString:defaultUniqueID]) {
+        return [name stringByAppendingString:@" (System default)"];
+    }
+    return name;
 }
 
 static NSTextField *make_label(NSString *title, CGFloat size,
@@ -210,6 +233,8 @@ static float parameter_value_for_id(NSArray<NSDictionary *> *parameterValues,
     BOOL _includeCustomParameters;
     BOOL _includeARKitAliases;
     BOOL _includeACVABlendshapeParameters;
+    NSString *_selectedCameraUniqueID;
+    NSArray<AVCaptureDevice *> *_cameraDevices;
     AppleCVAOneEuroParameters _oneEuroParameters;
 
     NSWindow *_window;
@@ -222,6 +247,7 @@ static float parameter_value_for_id(NSArray<NSDictionary *> *parameterValues,
     NSButton *_calibrationButton;
     NSTextField *_hostField;
     NSTextField *_portField;
+    NSPopUpButton *_cameraPopup;
     NSPopUpButton *_backendPopup;
     NSButton *_useOneEuroCheckbox;
     NSButton *_customParametersCheckbox;
@@ -256,6 +282,10 @@ static float parameter_value_for_id(NSArray<NSDictionary *> *parameterValues,
             default_bool(kDefaultsIncludeARKitAliasesKey, YES);
         _includeACVABlendshapeParameters =
             default_bool(kDefaultsIncludeACVABlendshapesKey, NO);
+        NSString *cameraUniqueID =
+            [defaults stringForKey:kDefaultsCameraUniqueIDKey];
+        _selectedCameraUniqueID =
+            cameraUniqueID.length != 0 ? [cameraUniqueID copy] : nil;
 
         _oneEuroParameters = AppleCVAOneEuroParametersDefault();
         _oneEuroParameters.min_cutoff = (float)default_double(
@@ -341,6 +371,17 @@ static float parameter_value_for_id(NSArray<NSDictionary *> *parameterValues,
       [strongSelf applyPreviewSettingsFromView];
     };
 
+    NSNotificationCenter *notificationCenter =
+        NSNotificationCenter.defaultCenter;
+    [notificationCenter addObserver:self
+                           selector:@selector(cameraDevicesChanged:)
+                               name:AVCaptureDeviceWasConnectedNotification
+                             object:nil];
+    [notificationCenter addObserver:self
+                           selector:@selector(cameraDevicesChanged:)
+                               name:AVCaptureDeviceWasDisconnectedNotification
+                             object:nil];
+
     _pipeline = [self makeTrackingPipeline];
     [_view
         updateWithPixelBuffer:NULL
@@ -365,6 +406,7 @@ static float parameter_value_for_id(NSArray<NSDictionary *> *parameterValues,
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
     (void)notification;
+    [NSNotificationCenter.defaultCenter removeObserver:self];
     [_pipeline stop];
     [self stopVTSClient];
 }
@@ -422,6 +464,14 @@ static float parameter_value_for_id(NSArray<NSDictionary *> *parameterValues,
 
     [stack addArrangedSubview:make_spacer(4.0)];
     [stack addArrangedSubview:make_section_label(@"Tracking")];
+    _cameraPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect
+                                              pullsDown:NO];
+    _cameraPopup.translatesAutoresizingMaskIntoConstraints = NO;
+    _cameraPopup.target = self;
+    _cameraPopup.action = @selector(cameraSelectionChanged:);
+    [self reloadCameraDevices];
+    [stack addArrangedSubview:make_row(@"Camera", _cameraPopup)];
+
     _backendPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect
                                                pullsDown:NO];
     _backendPopup.translatesAutoresizingMaskIntoConstraints = NO;
@@ -507,8 +557,10 @@ static float parameter_value_for_id(NSArray<NSDictionary *> *parameterValues,
 }
 
 - (AppleCVATrackingPipeline *)makeTrackingPipeline {
+    AVCaptureDevice *captureDevice = [self selectedCameraDevice];
     AppleCVATrackingPipeline *pipeline = [[AppleCVATrackingPipeline alloc]
         initWithFullBackend:_useFullBackend
+              captureDevice:captureDevice
           captureQueueLabel:@"local.applecva.vts-source.capture"];
     pipeline.useOneEuroFilter = _enableFilter;
     pipeline.oneEuroParameters = _oneEuroParameters;
@@ -535,6 +587,7 @@ static float parameter_value_for_id(NSArray<NSDictionary *> *parameterValues,
 
 - (void)syncAllControlsFromState {
     [self syncConnectionControls];
+    [self syncCameraControl];
     [self syncTrackingControls];
     [self syncOneEuroControls];
     [self syncPreviewControlsFromView];
@@ -588,8 +641,81 @@ static float parameter_value_for_id(NSArray<NSDictionary *> *parameterValues,
 }
 
 - (void)syncControlEnabledStates {
+    _cameraPopup.enabled = _cameraDevices.count != 0;
     _arkitAliasesCheckbox.enabled = _includeCustomParameters;
     _acvaBlendshapeCheckbox.enabled = _includeCustomParameters;
+}
+
+- (void)syncCameraControl {
+    if (_cameraPopup == nil) {
+        return;
+    }
+    NSString *selectedUniqueID = _selectedCameraUniqueID ?: @"";
+    NSInteger selectedIndex = 0;
+    for (NSInteger index = 0; index < _cameraPopup.numberOfItems; ++index) {
+        NSMenuItem *item = [_cameraPopup itemAtIndex:index];
+        NSString *uniqueID =
+            [item.representedObject isKindOfClass:NSString.class]
+                ? item.representedObject
+                : @"";
+        if ([uniqueID isEqualToString:selectedUniqueID]) {
+            selectedIndex = index;
+            break;
+        }
+    }
+    [_cameraPopup selectItemAtIndex:selectedIndex];
+}
+
+- (void)reloadCameraDevices {
+    _cameraDevices = [available_video_capture_devices() copy];
+    if (_cameraPopup == nil) {
+        return;
+    }
+
+    [_cameraPopup removeAllItems];
+    if (_cameraDevices.count == 0) {
+        [_cameraPopup addItemWithTitle:@"No cameras found"];
+        _cameraPopup.lastItem.representedObject = @"";
+        _cameraPopup.enabled = NO;
+        return;
+    }
+
+    AVCaptureDevice *defaultDevice =
+        [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
+    NSString *defaultUniqueID = defaultDevice.uniqueID ?: @"";
+    [_cameraPopup addItemWithTitle:@"System default"];
+    _cameraPopup.lastItem.representedObject = @"";
+    for (AVCaptureDevice *device in _cameraDevices) {
+        [_cameraPopup addItemWithTitle:camera_title(device, defaultUniqueID)];
+        _cameraPopup.lastItem.representedObject = device.uniqueID ?: @"";
+    }
+    _cameraPopup.enabled = YES;
+    [self syncCameraControl];
+}
+
+- (AVCaptureDevice *)selectedCameraDevice {
+    if (_selectedCameraUniqueID.length == 0) {
+        return nil;
+    }
+    AVCaptureDevice *device =
+        [self selectedCameraDeviceInDevices:_cameraDevices];
+    if (device != nil) {
+        return device;
+    }
+    return [AVCaptureDevice deviceWithUniqueID:_selectedCameraUniqueID];
+}
+
+- (AVCaptureDevice *)selectedCameraDeviceInDevices:
+    (NSArray<AVCaptureDevice *> *)devices {
+    if (_selectedCameraUniqueID.length == 0) {
+        return nil;
+    }
+    for (AVCaptureDevice *device in devices) {
+        if ([device.uniqueID isEqualToString:_selectedCameraUniqueID]) {
+            return device;
+        }
+    }
+    return nil;
 }
 
 - (void)saveSettings {
@@ -604,6 +730,12 @@ static float parameter_value_for_id(NSArray<NSDictionary *> *parameterValues,
                forKey:kDefaultsIncludeARKitAliasesKey];
     [defaults setBool:_includeACVABlendshapeParameters
                forKey:kDefaultsIncludeACVABlendshapesKey];
+    if (_selectedCameraUniqueID.length != 0) {
+        [defaults setObject:_selectedCameraUniqueID
+                     forKey:kDefaultsCameraUniqueIDKey];
+    } else {
+        [defaults removeObjectForKey:kDefaultsCameraUniqueIDKey];
+    }
     if (_view != nil) {
         [defaults setBool:_view.mirrorPreview forKey:kDefaultsMirrorPreviewKey];
         [defaults setBool:_view.showCameraPreview
@@ -618,6 +750,52 @@ static float parameter_value_for_id(NSArray<NSDictionary *> *parameterValues,
     [defaults setDouble:_oneEuroParameters.beta forKey:kDefaultsOneEuroBetaKey];
     [defaults setDouble:_oneEuroParameters.derivative_cutoff
                  forKey:kDefaultsOneEuroDerivativeCutoffKey];
+}
+
+- (void)cameraSelectionChanged:(id)sender {
+    (void)sender;
+    NSMenuItem *selectedItem = _cameraPopup.selectedItem;
+    NSString *selectedUniqueID =
+        [selectedItem.representedObject isKindOfClass:NSString.class]
+            ? selectedItem.representedObject
+            : @"";
+    NSString *currentUniqueID = _selectedCameraUniqueID ?: @"";
+    if ([selectedUniqueID isEqualToString:currentUniqueID]) {
+        return;
+    }
+
+    _selectedCameraUniqueID =
+        selectedUniqueID.length != 0 ? [selectedUniqueID copy] : nil;
+    [self saveSettings];
+    [self restartTrackingPipelineResetCalibration:YES];
+}
+
+- (void)cameraDevicesChanged:(NSNotification *)notification {
+    (void)notification;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      BOOL selectedCameraWasAvailable =
+          [self selectedCameraDeviceInDevices:self->_cameraDevices] != nil;
+      [self reloadCameraDevices];
+      BOOL selectedCameraIsAvailable =
+          [self selectedCameraDeviceInDevices:self->_cameraDevices] != nil;
+      [self syncControlEnabledStates];
+      if (self->_selectedCameraUniqueID.length != 0 &&
+          selectedCameraWasAvailable != selectedCameraIsAvailable) {
+          [self restartTrackingPipelineResetCalibration:YES];
+      }
+    });
+}
+
+- (void)restartTrackingPipelineResetCalibration:(BOOL)resetCalibration {
+    [self stopVTSClient];
+    [_pipeline stop];
+    if (resetCalibration) {
+        _calibrationController = [[VTSCalibrationController alloc] init];
+    }
+    _pipeline = [self makeTrackingPipeline];
+    [_pipeline start];
+    [self updateCalibrationControlOnMain];
+    _view.needsDisplay = YES;
 }
 
 - (void)connectionChanged:(id)sender {
@@ -674,11 +852,7 @@ static float parameter_value_for_id(NSArray<NSDictionary *> *parameterValues,
     _pipeline.oneEuroParameters = _oneEuroParameters;
 
     if (backendChanged) {
-        [self stopVTSClient];
-        [_pipeline stop];
-        _calibrationController = [[VTSCalibrationController alloc] init];
-        _pipeline = [self makeTrackingPipeline];
-        [_pipeline start];
+        [self restartTrackingPipelineResetCalibration:YES];
     } else if (injectionChanged) {
         [self stopVTSClient];
     }

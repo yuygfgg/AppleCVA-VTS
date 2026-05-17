@@ -7,6 +7,8 @@
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
 
+@class AVCaptureDevice;
+
 typedef void (^AppleCVATrackingPipelineStatusHandler)(NSString *message,
                                                       int32_t status);
 
@@ -19,12 +21,16 @@ typedef void (^AppleCVATrackingPipelineFrameHandler)(
 
 @property(nonatomic, readonly, assign) BOOL running;
 @property(nonatomic, readonly, assign) BOOL useFullBackend;
+@property(nonatomic, readonly, strong) AVCaptureDevice *captureDevice;
 @property(nonatomic, assign) BOOL useOneEuroFilter;
 @property(nonatomic, assign) AppleCVAOneEuroParameters oneEuroParameters;
 @property(nonatomic, copy) AppleCVATrackingPipelineStatusHandler statusHandler;
 @property(nonatomic, copy) AppleCVATrackingPipelineFrameHandler frameHandler;
 
 - (instancetype)initWithFullBackend:(BOOL)useFullBackend
+                  captureQueueLabel:(NSString *)captureQueueLabel;
+- (instancetype)initWithFullBackend:(BOOL)useFullBackend
+                      captureDevice:(AVCaptureDevice *)captureDevice
                   captureQueueLabel:(NSString *)captureQueueLabel;
 - (void)start;
 - (void)stop;
