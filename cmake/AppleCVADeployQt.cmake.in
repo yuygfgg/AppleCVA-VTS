@@ -1,0 +1,80 @@
+set(_applecva_app "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/@APPLECVA_APP_NAME@.app")
+
+if(NOT EXISTS "${_applecva_app}")
+    message(FATAL_ERROR "App bundle not found: ${_applecva_app}")
+endif()
+
+set(_applecva_deploy_tool_dir
+    "@CMAKE_CURRENT_BINARY_DIR@/qt-deploy-tools/bin")
+set(_applecva_deploy_tool
+    "${_applecva_deploy_tool_dir}/macdeployqt")
+set(_applecva_qmlimportscanner
+    "${_applecva_deploy_tool_dir}/qmlimportscanner")
+
+file(MAKE_DIRECTORY "${_applecva_deploy_tool_dir}")
+file(REMOVE "${_applecva_deploy_tool}" "${_applecva_qmlimportscanner}")
+execute_process(
+    COMMAND
+        "@CMAKE_COMMAND@"
+        -E
+        create_symlink
+        "@APPLECVA_MACDEPLOYQT_EXECUTABLE@"
+        "${_applecva_deploy_tool}"
+    RESULT_VARIABLE _applecva_deploy_tool_result)
+if(NOT _applecva_deploy_tool_result EQUAL 0)
+    message(FATAL_ERROR
+            "Could not create macdeployqt wrapper: ${_applecva_deploy_tool_result}")
+endif()
+execute_process(
+    COMMAND
+        "@CMAKE_COMMAND@"
+        -E
+        create_symlink
+        "@APPLECVA_QMLIMPORTSCANNER_EXECUTABLE@"
+        "${_applecva_qmlimportscanner}"
+    RESULT_VARIABLE _applecva_qmlimportscanner_result)
+if(NOT _applecva_qmlimportscanner_result EQUAL 0)
+    message(FATAL_ERROR
+            "Could not create qmlimportscanner wrapper: ${_applecva_qmlimportscanner_result}")
+endif()
+file(WRITE "${_applecva_deploy_tool_dir}/qt.conf"
+     "[Paths]\n"
+     "Prefix=@APPLECVA_QT_BASE_PREFIX@\n"
+     "Libraries=@APPLECVA_QT_INSTALL_LIBS@\n"
+     "Plugins=@APPLECVA_QT_INSTALL_PLUGINS@\n"
+     "LibraryExecutables=@APPLECVA_QT_INSTALL_LIBEXECS@\n"
+     "QmlImports=@APPLECVA_QT_QML_IMPORT_PATH@\n")
+
+execute_process(
+    COMMAND
+        "${_applecva_deploy_tool}"
+        "${_applecva_app}"
+        "-qmldir=@APPLECVA_QML_SOURCE_DIR@"
+        "-qmlimport=@APPLECVA_QT_QML_IMPORT_PATH@"
+        "-always-overwrite"
+        "-no-strip"
+        "-no-codesign"
+    RESULT_VARIABLE _applecva_macdeployqt_result)
+if(NOT _applecva_macdeployqt_result EQUAL 0)
+    message(FATAL_ERROR "macdeployqt failed with exit code ${_applecva_macdeployqt_result}")
+endif()
+
+file(REMOVE
+    "${_applecva_app}/Contents/PlugIns/imageformats/libqpdf.dylib"
+    "${_applecva_app}/Contents/PlugIns/iconengines/libqsvgicon.dylib"
+    "${_applecva_app}/Contents/PlugIns/platforminputcontexts/libqtvirtualkeyboardplugin.dylib")
+file(REMOVE_RECURSE
+    "${_applecva_app}/Contents/Resources/qml/QtQuick/VirtualKeyboard")
+
+execute_process(
+    COMMAND
+        /usr/bin/codesign
+        --force
+        --deep
+        --sign
+        "@APPLECVA_CODESIGN_IDENTITY@"
+        "${_applecva_app}"
+    RESULT_VARIABLE _applecva_codesign_result)
+if(NOT _applecva_codesign_result EQUAL 0)
+    message(FATAL_ERROR "codesign failed with exit code ${_applecva_codesign_result}")
+endif()

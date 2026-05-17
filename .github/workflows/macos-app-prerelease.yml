@@ -43,15 +43,61 @@ jobs:
           ref: ${{ matrix.commit }}
           fetch-depth: 0
 
+      - name: Install Qt
+        run: brew install qt
+
+      - name: Resolve Qt path
+        run: |
+          qt_prefix="$(brew --prefix qt)"
+          echo "QT_PREFIX=$qt_prefix" >> "$GITHUB_ENV"
+          echo "$qt_prefix/bin" >> "$GITHUB_PATH"
+
       - name: Configure
-        run: >
-          cmake -S . -B build
-          -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
-          -DAPPLECVA_CODESIGN_IDENTITY="-"
-          -DCPACK_PACKAGE_FILE_NAME="AppleCVA-VTS-Source-${{ matrix.commit }}-macos"
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DCMAKE_PREFIX_PATH="$QT_PREFIX" \
+            -DAPPLECVA_MACDEPLOYQT_EXECUTABLE="$QT_PREFIX/bin/macdeployqt" \
+            -DAPPLECVA_CODESIGN_IDENTITY="-" \
+            -DCPACK_PACKAGE_FILE_NAME="AppleCVA-VTS-Source-${{ matrix.commit }}-macos"
 
       - name: Build package
         run: cmake --build build --config "$BUILD_TYPE" --target package --parallel
+
+      - name: Verify package
+        run: |
+          package_path="$(find build -maxdepth 1 -name '*.zip' -print -quit)"
+          test -n "$package_path"
+
+          tmpdir="$(mktemp -d)"
+          unzip -q "$package_path" -d "$tmpdir"
+          app_path="$tmpdir/AppleCVA VTS Source.app"
+
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+
+          bad_refs_file="$tmpdir/bad-refs.txt"
+          find "$app_path/Contents" -type f -print0 \
+            | xargs -0 file \
+            | awk -F: '/Mach-O/ {print $1}' \
+            | while IFS= read -r binary_path; do
+                install_name="$(otool -D "$binary_path" 2>/dev/null | sed -n '2p' || true)"
+                otool -L "$binary_path" \
+                  | sed '1d' \
+                  | grep '/opt/homebrew' \
+                  | while IFS= read -r dependency; do
+                      if [ -n "$install_name" ]; then
+                        case "$dependency" in
+                          *"$install_name"*) continue ;;
+                        esac
+                      fi
+                      printf '%s\n%s\n' "$binary_path" "$dependency" >> "$bad_refs_file"
+                    done || true
+              done
+
+          if [ -s "$bad_refs_file" ]; then
+            cat "$bad_refs_file"
+            exit 1
+          fi
 
       - name: Publish commit prerelease
         uses: softprops/action-gh-release@v3

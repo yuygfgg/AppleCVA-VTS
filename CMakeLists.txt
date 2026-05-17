@@ -31,6 +31,92 @@ set(APPLECVA_BUNDLE_IDENTIFIER "local.applecva.vts-source")
 set(APPLECVA_CODESIGN_IDENTITY "-"
     CACHE STRING "Code signing identity for the macOS app bundle; '-' uses ad-hoc signing")
 
+get_target_property(APPLECVA_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
+if(NOT APPLECVA_QMAKE_EXECUTABLE)
+    message(FATAL_ERROR "Qt6::qmake was not found; cannot locate macdeployqt")
+endif()
+get_filename_component(APPLECVA_QT_BIN_DIR "${APPLECVA_QMAKE_EXECUTABLE}" DIRECTORY)
+execute_process(
+    COMMAND "${APPLECVA_QMAKE_EXECUTABLE}" -query QT_INSTALL_PREFIX
+    OUTPUT_VARIABLE APPLECVA_QT_INSTALL_PREFIX
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    COMMAND_ERROR_IS_FATAL ANY)
+set(_applecva_qtbase_config "${Qt6_DIR}/Qt6Config.cmake")
+if(NOT EXISTS "${_applecva_qtbase_config}")
+    message(FATAL_ERROR "Qt6Config.cmake was not found")
+endif()
+file(REAL_PATH "${_applecva_qtbase_config}" _applecva_qtbase_config_real)
+get_filename_component(_applecva_qtbase_cmake_dir
+                       "${_applecva_qtbase_config_real}" DIRECTORY)
+get_filename_component(APPLECVA_QT_BASE_PREFIX
+                       "${_applecva_qtbase_cmake_dir}/../../.." ABSOLUTE)
+set(APPLECVA_QT_INSTALL_LIBS
+    "${APPLECVA_QT_BASE_PREFIX}/lib")
+set(APPLECVA_QT_INSTALL_PLUGINS
+    "${APPLECVA_QT_BASE_PREFIX}/share/qt/plugins")
+set(APPLECVA_QT_INSTALL_LIBEXECS
+    "${APPLECVA_QT_BASE_PREFIX}/share/qt/libexec")
+find_program(APPLECVA_MACDEPLOYQT_EXECUTABLE
+    NAMES macdeployqt
+    HINTS "${APPLECVA_QT_BIN_DIR}"
+    NO_DEFAULT_PATH)
+if(NOT APPLECVA_MACDEPLOYQT_EXECUTABLE)
+    find_program(APPLECVA_MACDEPLOYQT_EXECUTABLE NAMES macdeployqt REQUIRED)
+endif()
+set(APPLECVA_MACDEPLOYQT_EXECUTABLE "${APPLECVA_MACDEPLOYQT_EXECUTABLE}"
+    CACHE FILEPATH "Path to the Qt 6 macdeployqt executable")
+set(APPLECVA_QT_INSTALL_PREFIX "${APPLECVA_QT_INSTALL_PREFIX}"
+    CACHE PATH "Qt installation prefix used by macdeployqt" FORCE)
+set(APPLECVA_QT_BASE_PREFIX "${APPLECVA_QT_BASE_PREFIX}"
+    CACHE PATH "QtBase installation prefix used by macdeployqt" FORCE)
+set(APPLECVA_QT_INSTALL_LIBS "${APPLECVA_QT_INSTALL_LIBS}"
+    CACHE PATH "Qt libraries directory used by macdeployqt" FORCE)
+set(APPLECVA_QT_INSTALL_PLUGINS "${APPLECVA_QT_INSTALL_PLUGINS}"
+    CACHE PATH "Qt plugins directory used by macdeployqt" FORCE)
+set(APPLECVA_QT_INSTALL_LIBEXECS "${APPLECVA_QT_INSTALL_LIBEXECS}"
+    CACHE PATH "Qt libexec directory used by macdeployqt" FORCE)
+
+set(APPLECVA_QT_QML_IMPORT_PATH ""
+    CACHE PATH "Qt QML import root used by macdeployqt")
+if(NOT APPLECVA_QT_QML_IMPORT_PATH)
+    set(_applecva_qtquick_config "${Qt6Quick_DIR}/Qt6QuickConfig.cmake")
+    if(EXISTS "${_applecva_qtquick_config}")
+        file(REAL_PATH "${_applecva_qtquick_config}"
+             _applecva_qtquick_config_real)
+        get_filename_component(_applecva_qtquick_cmake_dir
+                               "${_applecva_qtquick_config_real}" DIRECTORY)
+        get_filename_component(_applecva_qtdeclarative_prefix
+                               "${_applecva_qtquick_cmake_dir}/../../.." ABSOLUTE)
+        set(_applecva_qt_qml_import_path
+            "${_applecva_qtdeclarative_prefix}/share/qt/qml")
+        if(EXISTS "${_applecva_qt_qml_import_path}")
+            set(APPLECVA_QT_QML_IMPORT_PATH
+                "${_applecva_qt_qml_import_path}"
+                CACHE PATH "Qt QML import root used by macdeployqt" FORCE)
+        endif()
+    endif()
+endif()
+if(NOT APPLECVA_QT_QML_IMPORT_PATH)
+    message(FATAL_ERROR "Qt QML import root was not found")
+endif()
+
+get_filename_component(APPLECVA_QT_SHARE_DIR
+                       "${APPLECVA_QT_QML_IMPORT_PATH}/.." ABSOLUTE)
+find_program(APPLECVA_QMLIMPORTSCANNER_EXECUTABLE
+    NAMES qmlimportscanner
+    HINTS
+        "${APPLECVA_QT_SHARE_DIR}/libexec"
+        "${APPLECVA_QT_INSTALL_PREFIX}/share/qt/libexec"
+        "${APPLECVA_QT_BIN_DIR}"
+    NO_DEFAULT_PATH)
+if(NOT APPLECVA_QMLIMPORTSCANNER_EXECUTABLE)
+    find_program(APPLECVA_QMLIMPORTSCANNER_EXECUTABLE
+                 NAMES qmlimportscanner REQUIRED)
+endif()
+set(APPLECVA_QMLIMPORTSCANNER_EXECUTABLE
+    "${APPLECVA_QMLIMPORTSCANNER_EXECUTABLE}"
+    CACHE FILEPATH "Path to the Qt 6 qmlimportscanner executable")
+
 set(APPLECVA_FRAMEWORKS
     Foundation
     Vision
@@ -152,13 +238,17 @@ add_custom_target(vts_source_codesign ALL
 
 install(TARGETS vts_source
     BUNDLE DESTINATION ".")
-install(CODE "
-    execute_process(
-        COMMAND /usr/bin/codesign --force --deep --sign
-                \"${APPLECVA_CODESIGN_IDENTITY}\"
-                \"\${CMAKE_INSTALL_PREFIX}/${APPLECVA_APP_NAME}.app\"
-        COMMAND_ERROR_IS_FATAL ANY)
-")
+install(TARGETS applecva
+    LIBRARY DESTINATION "${APPLECVA_APP_NAME}.app/Contents/Frameworks")
+
+set(APPLECVA_QML_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/apps/vts_source/qml")
+set(APPLECVA_QT_DEPLOY_SCRIPT
+    "${CMAKE_CURRENT_BINARY_DIR}/cmake/AppleCVADeployQt.cmake")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/AppleCVADeployQt.cmake.in"
+    "${APPLECVA_QT_DEPLOY_SCRIPT}"
+    @ONLY)
+install(SCRIPT "${APPLECVA_QT_DEPLOY_SCRIPT}")
 
 set(CPACK_GENERATOR "ZIP")
 set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY OFF)
