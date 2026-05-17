@@ -105,6 +105,10 @@ static NSString *status_string_for_code(int32_t status) {
         _mirrorPreview = YES;
         _showCameraPreview = YES;
         _faceRectUsesTopLeftOrigin = YES;
+        AppleCVAOneEuroParameters defaults = AppleCVAOneEuroParametersDefault();
+        _oneEuroMinCutoff = defaults.min_cutoff;
+        _oneEuroBeta = defaults.beta;
+        _oneEuroDerivativeCutoff = defaults.derivative_cutoff;
         _calibrationButtonTitle = @"Calibrate";
         _calibrationButtonEnabled = YES;
         self.wantsLayer = YES;
@@ -183,7 +187,7 @@ static NSString *status_string_for_code(int32_t status) {
 
 - (void)keyDown:(NSEvent *)event {
     NSString *characters = event.charactersIgnoringModifiers.lowercaseString;
-    if ([characters isEqualToString:@"c"] && self.showsCalibrationButton) {
+    if ([characters isEqualToString:@"c"]) {
         [self performCalibrationAction:self];
         return;
     }
@@ -548,6 +552,9 @@ static NSString *status_string_for_code(int32_t status) {
         [text appendFormat:@"\nbackend %@  one-euro %@",
                            self.useFullBackend ? @"full" : @"lite",
                            self.useOneEuroFilter ? @"on" : @"off"];
+        [text appendFormat:@"  min %.2f beta %.4f d %.2f",
+                           self.oneEuroMinCutoff, self.oneEuroBeta,
+                           self.oneEuroDerivativeCutoff];
         if (self.extraStatusLine.length != 0) {
             [text appendFormat:@"\n%@", self.extraStatusLine];
         }

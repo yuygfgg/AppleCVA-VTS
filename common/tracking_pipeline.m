@@ -36,6 +36,8 @@ static const uint32_t kAppleCVAPipelineVisionOrientation = 1;
     double _firstFrameTimestamp;
     AppleCVAFaceOneEuroFilter _faceFilter;
     BOOL _lastOneEuroFilterEnabled;
+    AppleCVAOneEuroParameters _oneEuroParameters;
+    AppleCVAOneEuroParameters _lastAppliedOneEuroParameters;
 }
 
 - (instancetype)initWithFullBackend:(BOOL)useFullBackend
@@ -44,6 +46,8 @@ static const uint32_t kAppleCVAPipelineVisionOrientation = 1;
     if (self != nil) {
         _useFullBackend = useFullBackend;
         _useOneEuroFilter = YES;
+        _oneEuroParameters = AppleCVAOneEuroParametersDefault();
+        _lastAppliedOneEuroParameters = _oneEuroParameters;
         _captureQueueLabel =
             [captureQueueLabel copy] ?: @"local.applecva.tracking-pipeline";
         _lastStatus = APPLECVA_OK;
@@ -212,6 +216,14 @@ static const uint32_t kAppleCVAPipelineVisionOrientation = 1;
     }
 
     const BOOL oneEuroFilterEnabled = self.useOneEuroFilter;
+    const AppleCVAOneEuroParameters currentParameters = self.oneEuroParameters;
+    const BOOL parametersChanged =
+        memcmp(&_lastAppliedOneEuroParameters, &currentParameters,
+               sizeof(AppleCVAOneEuroParameters)) != 0;
+    if (parametersChanged) {
+        _lastAppliedOneEuroParameters = currentParameters;
+        AppleCVAFaceOneEuroFilterReset(&_faceFilter);
+    }
     if (!oneEuroFilterEnabled) {
         if (_lastOneEuroFilterEnabled) {
             AppleCVAFaceOneEuroFilterReset(&_faceFilter);
@@ -221,7 +233,8 @@ static const uint32_t kAppleCVAPipelineVisionOrientation = 1;
     }
     _lastOneEuroFilterEnabled = oneEuroFilterEnabled;
     if (oneEuroFilterEnabled && hasDisplayFace) {
-        AppleCVAFaceOneEuroFilterApply(&_faceFilter, &displayFace, timestamp);
+        AppleCVAFaceOneEuroFilterApplyWithParameters(
+            &_faceFilter, &displayFace, timestamp, &currentParameters);
     }
 
     ++_frameIndex;

@@ -12,12 +12,36 @@ cmake --build build --config Release
 ## Run
 
 ```sh
-./build/vts_source [--host 127.0.0.1] [--port 8001] [--full] [--no-filter] [--no-custom] [--no-arkit-aliases] [--acva-blendshapes]
+./build/vts_source
 ```
 
 Calibration is required before the app connects to VTube Studio or injects tracking parameters. Start the app, keep a neutral expression, look straight at the camera, and press `Calibrate First` button or `c` key.
 
-The app injects available default VTS tracking parameters and, by default, creates full ARKit-style aliases plus a small set of derived `ACVA...` custom parameters. Use `--no-custom` to inject only default VTS parameters, `--no-arkit-aliases` to disable alias custom parameters, or `--acva-blendshapes` to fill remaining custom slots with raw `ACVA...` blendshape channels.
+The app injects available default VTS tracking parameters and, by default, creates full ARKit-style aliases plus a small set of derived `ACVA...` custom parameters.
+
+## GUI Settings
+
+All runtime settings are configured in the right-side panel and are saved for the next launch:
+
+| Setting                        | Purpose                                                                                                                        |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| Host / Port                    | VTube Studio websocket target.                                                                                                 |
+| Inject custom parameters       | Enable derived `ACVA...` custom parameter creation and injection.                                                              |
+| Include ARKit aliases          | Create ARKit-style custom aliases when VTS does not expose matching defaults.                                                  |
+| Fill raw ACVA blendshapes      | Use remaining VTS custom slots for raw `ACVA...` blendshape channels.                                                          |
+| Backend                        | Switch between full and lite AppleCVA backend. Full is the default. Changing backend restarts tracking and clears calibration. |
+| Use One Euro filter            | Toggle smoothing for preview and emitted VTS data.                                                                             |
+| Min cutoff / Beta / Derivative | Tune the One Euro filter parameters live.                                                                                      |
+| Preview toggles                | Mirror preview, camera visibility, landmark Y flip, and source-origin handling.                                                |
+
+## One Euro Tuning
+
+1. Set `Beta` to `0`.
+2. Move slowly and watch the preview and VTube Studio model. Lower `Min cutoff` until slow movement and idle tracking no longer jitter. At this stage, fast movement will usually feel very delayed; ignore that for now.
+3. Keep that `Min cutoff` value fixed. Move quickly, then slowly raise `Beta` until fast movement no longer feels delayed and the model follows your motion closely.
+4. Stop as soon as the motion feels responsive. Too much `Beta` brings fast-motion noise back.
+
+`Derivative` is an advanced One Euro parameter. Leave it at the default unless `Beta` feels unstable even after tuning. If `Beta` reacts too nervously, raise `Derivative` slightly; if `Beta` feels slow to engage, lower it slightly.
 
 ## Preview Controls
 

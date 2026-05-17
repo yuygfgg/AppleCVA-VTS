@@ -27,6 +27,9 @@ typedef void (^AppleCVAOverlayViewSettingsChangedHandler)(
 @property(nonatomic, assign) BOOL flipLandmarkShapeY;
 @property(nonatomic, assign) BOOL faceRectUsesTopLeftOrigin;
 @property(nonatomic, assign) BOOL useOneEuroFilter;
+@property(nonatomic, assign) float oneEuroMinCutoff;
+@property(nonatomic, assign) float oneEuroBeta;
+@property(nonatomic, assign) float oneEuroDerivativeCutoff;
 @property(nonatomic, assign) BOOL useFullBackend;
 @property(nonatomic, assign) BOOL showsCalibrationButton;
 @property(nonatomic, assign) BOOL calibrationButtonEnabled;

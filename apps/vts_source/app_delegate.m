@@ -5,8 +5,176 @@
 #import "overlay_view.h"
 #import "parameters.h"
 #import "tracking_pipeline.h"
+#import "tracking_utils.h"
 
 #import <Foundation/Foundation.h>
+#import <QuartzCore/QuartzCore.h>
+
+#include <math.h>
+#include <stdint.h>
+
+static const uint16_t kDefaultVTSPort = 8001;
+static const CGFloat kInitialWindowWidth = 1320.0;
+static const CGFloat kInitialWindowHeight = 760.0;
+static const CGFloat kSettingsPanelWidth = 340.0;
+static const CGFloat kSettingsLabelWidth = 94.0;
+static const double kOneEuroMinCutoffMinimum = 0.01;
+static const double kOneEuroMinCutoffMaximum = 10.0;
+static const double kOneEuroBetaMinimum = 0.0;
+static const double kOneEuroBetaMaximum = 0.05;
+static const double kOneEuroDerivativeCutoffMinimum = 0.01;
+static const double kOneEuroDerivativeCutoffMaximum = 10.0;
+
+static NSString *const kDefaultsHostKey = @"vts_source.host";
+static NSString *const kDefaultsPortKey = @"vts_source.port";
+static NSString *const kDefaultsUseFullBackendKey = @"vts_source.full_backend";
+static NSString *const kDefaultsEnableFilterKey = @"vts_source.enable_filter";
+static NSString *const kDefaultsIncludeCustomKey = @"vts_source.include_custom";
+static NSString *const kDefaultsIncludeARKitAliasesKey =
+    @"vts_source.include_arkit_aliases";
+static NSString *const kDefaultsIncludeACVABlendshapesKey =
+    @"vts_source.include_acva_blendshapes";
+static NSString *const kDefaultsMirrorPreviewKey = @"vts_source.mirror_preview";
+static NSString *const kDefaultsShowCameraPreviewKey =
+    @"vts_source.show_camera_preview";
+static NSString *const kDefaultsFlipLandmarkYKey =
+    @"vts_source.flip_landmark_y";
+static NSString *const kDefaultsTopLeftOriginKey =
+    @"vts_source.top_left_origin";
+static NSString *const kDefaultsOneEuroMinCutoffKey =
+    @"vts_source.one_euro.min_cutoff";
+static NSString *const kDefaultsOneEuroBetaKey = @"vts_source.one_euro.beta";
+static NSString *const kDefaultsOneEuroDerivativeCutoffKey =
+    @"vts_source.one_euro.derivative_cutoff";
+
+static BOOL default_bool(NSString *key, BOOL fallback) {
+    id value = [NSUserDefaults.standardUserDefaults objectForKey:key];
+    return [value respondsToSelector:@selector(boolValue)] ? [value boolValue]
+                                                           : fallback;
+}
+
+static double default_double(NSString *key, double fallback) {
+    id value = [NSUserDefaults.standardUserDefaults objectForKey:key];
+    return [value respondsToSelector:@selector(doubleValue)]
+               ? [value doubleValue]
+               : fallback;
+}
+
+static double clamp_double(double value, double minimum, double maximum) {
+    if (!isfinite(value)) {
+        return minimum;
+    }
+    if (value < minimum) {
+        return minimum;
+    }
+    if (value > maximum) {
+        return maximum;
+    }
+    return value;
+}
+
+static BOOL parse_port(NSString *string, uint16_t *outPort) {
+    NSString *trimmed = [string
+        stringByTrimmingCharactersInSet:NSCharacterSet
+                                            .whitespaceAndNewlineCharacterSet];
+    NSScanner *scanner = [NSScanner scannerWithString:trimmed];
+    NSInteger value = 0;
+    if (![scanner scanInteger:&value] || !scanner.isAtEnd || value <= 0 ||
+        value > UINT16_MAX) {
+        return NO;
+    }
+    if (outPort != NULL) {
+        *outPort = (uint16_t)value;
+    }
+    return YES;
+}
+
+static BOOL parse_double_value(NSString *string, double *outValue) {
+    NSString *trimmed = [string
+        stringByTrimmingCharactersInSet:NSCharacterSet
+                                            .whitespaceAndNewlineCharacterSet];
+    NSScanner *scanner = [NSScanner scannerWithString:trimmed];
+    double value = 0.0;
+    if (![scanner scanDouble:&value] || !scanner.isAtEnd || !isfinite(value)) {
+        return NO;
+    }
+    if (outValue != NULL) {
+        *outValue = value;
+    }
+    return YES;
+}
+
+static NSString *format_float(double value, NSUInteger fractionDigits) {
+    return [NSString stringWithFormat:@"%.*f", (int)fractionDigits, value];
+}
+
+static NSTextField *make_label(NSString *title, CGFloat size,
+                               NSFontWeight weight) {
+    NSTextField *label = [NSTextField labelWithString:title ?: @""];
+    label.translatesAutoresizingMaskIntoConstraints = NO;
+    label.font = [NSFont systemFontOfSize:size weight:weight];
+    label.textColor = NSColor.labelColor;
+    return label;
+}
+
+static NSTextField *make_section_label(NSString *title) {
+    NSTextField *label =
+        make_label([title uppercaseString], 11.0, NSFontWeightSemibold);
+    label.textColor = NSColor.secondaryLabelColor;
+    return label;
+}
+
+static NSView *make_spacer(CGFloat height) {
+    NSView *view = [[NSView alloc] initWithFrame:NSZeroRect];
+    view.translatesAutoresizingMaskIntoConstraints = NO;
+    [view.heightAnchor constraintEqualToConstant:height].active = YES;
+    return view;
+}
+
+static NSButton *make_checkbox(NSString *title, id target, SEL action) {
+    NSButton *button = [NSButton buttonWithTitle:title ?: @""
+                                          target:target
+                                          action:action];
+    button.translatesAutoresizingMaskIntoConstraints = NO;
+    [button setButtonType:NSButtonTypeSwitch];
+    button.font = [NSFont systemFontOfSize:12.0 weight:NSFontWeightRegular];
+    return button;
+}
+
+static NSStackView *make_row(NSString *labelText, NSView *control) {
+    NSTextField *label =
+        make_label(labelText ?: @"", 12.0, NSFontWeightRegular);
+    [label.widthAnchor constraintEqualToConstant:kSettingsLabelWidth].active =
+        YES;
+
+    NSStackView *row = [NSStackView stackViewWithViews:@[ label, control ]];
+    row.translatesAutoresizingMaskIntoConstraints = NO;
+    row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    row.alignment = NSLayoutAttributeCenterY;
+    row.spacing = 8.0;
+    [control.widthAnchor constraintEqualToConstant:190.0].active = YES;
+    [control setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                        forOrientation:NSLayoutConstraintOrientationHorizontal];
+    return row;
+}
+
+static NSStackView *make_slider_row(NSString *labelText, NSSlider *slider,
+                                    NSTextField *field) {
+    NSTextField *label =
+        make_label(labelText ?: @"", 12.0, NSFontWeightRegular);
+    [label.widthAnchor constraintEqualToConstant:kSettingsLabelWidth].active =
+        YES;
+    [slider.widthAnchor constraintEqualToConstant:112.0].active = YES;
+    [field.widthAnchor constraintEqualToConstant:72.0].active = YES;
+
+    NSStackView *row =
+        [NSStackView stackViewWithViews:@[ label, slider, field ]];
+    row.translatesAutoresizingMaskIntoConstraints = NO;
+    row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    row.alignment = NSLayoutAttributeCenterY;
+    row.spacing = 8.0;
+    return row;
+}
 
 static float parameter_value_for_id(NSArray<NSDictionary *> *parameterValues,
                                     NSString *parameterID, BOOL *outFound) {
@@ -42,29 +210,64 @@ static float parameter_value_for_id(NSArray<NSDictionary *> *parameterValues,
     BOOL _includeCustomParameters;
     BOOL _includeARKitAliases;
     BOOL _includeACVABlendshapeParameters;
+    AppleCVAOneEuroParameters _oneEuroParameters;
+
     NSWindow *_window;
+    NSView *_rootView;
     AppleCVAOverlayView *_view;
     AppleCVATrackingPipeline *_pipeline;
     VTSCalibrationController *_calibrationController;
     VTSClient *_vtsClient;
+
+    NSButton *_calibrationButton;
+    NSTextField *_hostField;
+    NSTextField *_portField;
+    NSPopUpButton *_backendPopup;
+    NSButton *_useOneEuroCheckbox;
+    NSButton *_customParametersCheckbox;
+    NSButton *_arkitAliasesCheckbox;
+    NSButton *_acvaBlendshapeCheckbox;
+    NSButton *_mirrorPreviewCheckbox;
+    NSButton *_showCameraPreviewCheckbox;
+    NSButton *_flipLandmarkYCheckbox;
+    NSButton *_topLeftOriginCheckbox;
+    NSSlider *_oneEuroMinCutoffSlider;
+    NSSlider *_oneEuroBetaSlider;
+    NSSlider *_oneEuroDerivativeCutoffSlider;
+    NSTextField *_oneEuroMinCutoffField;
+    NSTextField *_oneEuroBetaField;
+    NSTextField *_oneEuroDerivativeCutoffField;
 }
 
-- (instancetype)initWithHost:(NSString *)host
-                               port:(uint16_t)port
-                     useFullBackend:(BOOL)useFullBackend
-                       enableFilter:(BOOL)enableFilter
-            includeCustomParameters:(BOOL)includeCustomParameters
-                includeARKitAliases:(BOOL)includeARKitAliases
-    includeACVABlendshapeParameters:(BOOL)includeACVABlendshapeParameters {
+- (instancetype)init {
     self = [super init];
     if (self != nil) {
-        _host = [host copy] ?: @"127.0.0.1";
-        _port = port;
-        _useFullBackend = useFullBackend;
-        _enableFilter = enableFilter;
-        _includeCustomParameters = includeCustomParameters;
-        _includeARKitAliases = includeARKitAliases;
-        _includeACVABlendshapeParameters = includeACVABlendshapeParameters;
+        NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+        NSString *host = [defaults stringForKey:kDefaultsHostKey];
+        _host = host.length != 0 ? [host copy] : @"127.0.0.1";
+
+        NSInteger port = [defaults integerForKey:kDefaultsPortKey];
+        _port =
+            (port > 0 && port <= UINT16_MAX) ? (uint16_t)port : kDefaultVTSPort;
+        _useFullBackend = default_bool(kDefaultsUseFullBackendKey, YES);
+        _enableFilter = default_bool(kDefaultsEnableFilterKey, YES);
+        _includeCustomParameters = default_bool(kDefaultsIncludeCustomKey, YES);
+        _includeARKitAliases =
+            default_bool(kDefaultsIncludeARKitAliasesKey, YES);
+        _includeACVABlendshapeParameters =
+            default_bool(kDefaultsIncludeACVABlendshapesKey, NO);
+
+        _oneEuroParameters = AppleCVAOneEuroParametersDefault();
+        _oneEuroParameters.min_cutoff = (float)default_double(
+            kDefaultsOneEuroMinCutoffKey, _oneEuroParameters.min_cutoff);
+        _oneEuroParameters.beta = (float)default_double(
+            kDefaultsOneEuroBetaKey, _oneEuroParameters.beta);
+        _oneEuroParameters.derivative_cutoff =
+            (float)default_double(kDefaultsOneEuroDerivativeCutoffKey,
+                                  _oneEuroParameters.derivative_cutoff);
+        _oneEuroParameters =
+            AppleCVAOneEuroParametersSanitize(_oneEuroParameters);
+
         _calibrationController = [[VTSCalibrationController alloc] init];
     }
     return self;
@@ -74,17 +277,48 @@ static float parameter_value_for_id(NSArray<NSDictionary *> *parameterValues,
     (void)notification;
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
 
-    _view = [[AppleCVAOverlayView alloc]
-        initWithFrame:NSMakeRect(0.0, 0.0, 960.0, 720.0)];
+    _rootView =
+        [[NSView alloc] initWithFrame:NSMakeRect(0.0, 0.0, kInitialWindowWidth,
+                                                 kInitialWindowHeight)];
+    _rootView.wantsLayer = YES;
+    _rootView.layer.backgroundColor = NSColor.blackColor.CGColor;
+
+    _view = [[AppleCVAOverlayView alloc] initWithFrame:NSZeroRect];
+    _view.translatesAutoresizingMaskIntoConstraints = NO;
     _view.useFullBackend = _useFullBackend;
     _view.useOneEuroFilter = _enableFilter;
-    _view.showsCalibrationButton = YES;
-    _view.calibrationButtonTitle = @"Calibrate First";
-    _view.calibrationButtonEnabled = YES;
+    _view.oneEuroMinCutoff = _oneEuroParameters.min_cutoff;
+    _view.oneEuroBeta = _oneEuroParameters.beta;
+    _view.oneEuroDerivativeCutoff = _oneEuroParameters.derivative_cutoff;
+    _view.mirrorPreview = default_bool(kDefaultsMirrorPreviewKey, YES);
+    _view.showCameraPreview = default_bool(kDefaultsShowCameraPreviewKey, YES);
+    _view.flipLandmarkShapeY = default_bool(kDefaultsFlipLandmarkYKey, NO);
+    _view.faceRectUsesTopLeftOrigin =
+        default_bool(kDefaultsTopLeftOriginKey, YES);
+    _view.showsCalibrationButton = NO;
     [_view setCalibrationTarget:self action:@selector(startCalibration:)];
 
+    NSView *settingsPanel = [self makeSettingsPanel];
+    [_rootView addSubview:_view];
+    [_rootView addSubview:settingsPanel];
+    [NSLayoutConstraint activateConstraints:@[
+        [_view.leadingAnchor constraintEqualToAnchor:_rootView.leadingAnchor],
+        [_view.topAnchor constraintEqualToAnchor:_rootView.topAnchor],
+        [_view.bottomAnchor constraintEqualToAnchor:_rootView.bottomAnchor],
+        [_view.trailingAnchor
+            constraintEqualToAnchor:settingsPanel.leadingAnchor],
+        [settingsPanel.topAnchor constraintEqualToAnchor:_rootView.topAnchor],
+        [settingsPanel.bottomAnchor
+            constraintEqualToAnchor:_rootView.bottomAnchor],
+        [settingsPanel.trailingAnchor
+            constraintEqualToAnchor:_rootView.trailingAnchor],
+        [settingsPanel.widthAnchor
+            constraintEqualToConstant:kSettingsPanelWidth],
+    ]];
+
     _window = [[NSWindow alloc]
-        initWithContentRect:NSMakeRect(140.0, 120.0, 960.0, 720.0)
+        initWithContentRect:NSMakeRect(140.0, 120.0, kInitialWindowWidth,
+                                       kInitialWindowHeight)
                   styleMask:NSWindowStyleMaskTitled |
                             NSWindowStyleMaskClosable |
                             NSWindowStyleMaskResizable |
@@ -92,40 +326,22 @@ static float parameter_value_for_id(NSArray<NSDictionary *> *parameterValues,
                     backing:NSBackingStoreBuffered
                       defer:NO];
     _window.title = @"AppleCVA VTS Source";
-    _window.contentView = _view;
+    _window.minSize = NSMakeSize(1080.0, 620.0);
+    _window.contentView = _rootView;
     [_window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
 
     __weak VTSAppDelegate *weakSelf = self;
     _view.settingsChangedHandler = ^(AppleCVAOverlayView *view) {
+      (void)view;
       VTSAppDelegate *strongSelf = weakSelf;
       if (strongSelf == nil) {
           return;
       }
-      strongSelf->_pipeline.useOneEuroFilter = view.useOneEuroFilter;
+      [strongSelf applyPreviewSettingsFromView];
     };
 
-    _pipeline = [[AppleCVATrackingPipeline alloc]
-        initWithFullBackend:_useFullBackend
-          captureQueueLabel:@"local.applecva.vts-source.capture"];
-    _pipeline.useOneEuroFilter = _enableFilter;
-    _pipeline.statusHandler = ^(NSString *message, int32_t status) {
-      [weakSelf handlePipelineStatusMessage:message status:status];
-    };
-    _pipeline.frameHandler =
-        ^(CVPixelBufferRef pixelBuffer, const AppleCVATrackedFace *face,
-          BOOL hasFace, size_t detectedFaceCount, size_t trackedFaceCount,
-          int32_t status, double timestamp, double fps) {
-          (void)timestamp;
-          [weakSelf handleTrackingPixelBuffer:pixelBuffer
-                                         face:face
-                                      hasFace:hasFace
-                            detectedFaceCount:detectedFaceCount
-                             trackedFaceCount:trackedFaceCount
-                                       status:status
-                                          fps:fps];
-        };
-
+    _pipeline = [self makeTrackingPipeline];
     [_view
         updateWithPixelBuffer:NULL
                          face:NULL
@@ -137,6 +353,7 @@ static float parameter_value_for_id(NSArray<NSDictionary *> *parameterValues,
               extraStatusLine:[self
                                   currentExtraStatusLineWithParameterValues:nil]
                           fps:0.0];
+    [self syncAllControlsFromState];
     [_pipeline start];
 }
 
@@ -150,6 +367,416 @@ static float parameter_value_for_id(NSArray<NSDictionary *> *parameterValues,
     (void)notification;
     [_pipeline stop];
     [self stopVTSClient];
+}
+
+- (NSView *)makeSettingsPanel {
+    NSView *panel = [[NSView alloc] initWithFrame:NSZeroRect];
+    panel.translatesAutoresizingMaskIntoConstraints = NO;
+    panel.wantsLayer = YES;
+    panel.layer.backgroundColor = NSColor.windowBackgroundColor.CGColor;
+
+    NSStackView *stack = [[NSStackView alloc] initWithFrame:NSZeroRect];
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    stack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    stack.alignment = NSLayoutAttributeLeading;
+    stack.spacing = 8.0;
+    stack.edgeInsets = NSEdgeInsetsMake(16.0, 16.0, 16.0, 16.0);
+    [panel addSubview:stack];
+    [NSLayoutConstraint activateConstraints:@[
+        [stack.leadingAnchor constraintEqualToAnchor:panel.leadingAnchor],
+        [stack.trailingAnchor constraintEqualToAnchor:panel.trailingAnchor],
+        [stack.topAnchor constraintEqualToAnchor:panel.topAnchor],
+    ]];
+
+    NSTextField *title =
+        make_label(@"AppleCVA VTS Source", 17.0, NSFontWeightSemibold);
+    [stack addArrangedSubview:title];
+
+    _calibrationButton =
+        [NSButton buttonWithTitle:@"Calibrate First"
+                           target:self
+                           action:@selector(startCalibration:)];
+    _calibrationButton.translatesAutoresizingMaskIntoConstraints = NO;
+    _calibrationButton.bezelStyle = NSBezelStyleRounded;
+    [_calibrationButton.widthAnchor
+        constraintEqualToConstant:kSettingsPanelWidth - 32.0]
+        .active = YES;
+    [stack addArrangedSubview:_calibrationButton];
+
+    [stack addArrangedSubview:make_spacer(4.0)];
+    [stack addArrangedSubview:make_section_label(@"VTS")];
+    _hostField = [self makeTextFieldWithAction:@selector(connectionChanged:)];
+    _portField = [self makeTextFieldWithAction:@selector(connectionChanged:)];
+    [stack addArrangedSubview:make_row(@"Host", _hostField)];
+    [stack addArrangedSubview:make_row(@"Port", _portField)];
+
+    _customParametersCheckbox = make_checkbox(
+        @"Inject custom parameters", self, @selector(trackingOptionsChanged:));
+    _arkitAliasesCheckbox = make_checkbox(@"Include ARKit aliases", self,
+                                          @selector(trackingOptionsChanged:));
+    _acvaBlendshapeCheckbox = make_checkbox(@"Fill raw ACVA blendshapes", self,
+                                            @selector(trackingOptionsChanged:));
+    [stack addArrangedSubview:_customParametersCheckbox];
+    [stack addArrangedSubview:_arkitAliasesCheckbox];
+    [stack addArrangedSubview:_acvaBlendshapeCheckbox];
+
+    [stack addArrangedSubview:make_spacer(4.0)];
+    [stack addArrangedSubview:make_section_label(@"Tracking")];
+    _backendPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect
+                                               pullsDown:NO];
+    _backendPopup.translatesAutoresizingMaskIntoConstraints = NO;
+    [_backendPopup addItemsWithTitles:@[ @"Lite backend", @"Full backend" ]];
+    _backendPopup.target = self;
+    _backendPopup.action = @selector(trackingOptionsChanged:);
+    [stack addArrangedSubview:make_row(@"Backend", _backendPopup)];
+
+    _useOneEuroCheckbox = make_checkbox(@"Use One Euro filter", self,
+                                        @selector(trackingOptionsChanged:));
+    [stack addArrangedSubview:_useOneEuroCheckbox];
+
+    [stack addArrangedSubview:make_spacer(4.0)];
+    [stack addArrangedSubview:make_section_label(@"One Euro")];
+    _oneEuroMinCutoffSlider =
+        [self makeSliderWithMin:kOneEuroMinCutoffMinimum
+                            max:kOneEuroMinCutoffMaximum
+                         action:@selector(oneEuroSliderChanged:)];
+    _oneEuroBetaSlider =
+        [self makeSliderWithMin:kOneEuroBetaMinimum
+                            max:kOneEuroBetaMaximum
+                         action:@selector(oneEuroSliderChanged:)];
+    _oneEuroDerivativeCutoffSlider =
+        [self makeSliderWithMin:kOneEuroDerivativeCutoffMinimum
+                            max:kOneEuroDerivativeCutoffMaximum
+                         action:@selector(oneEuroSliderChanged:)];
+    _oneEuroMinCutoffField =
+        [self makeTextFieldWithAction:@selector(oneEuroFieldChanged:)];
+    _oneEuroBetaField =
+        [self makeTextFieldWithAction:@selector(oneEuroFieldChanged:)];
+    _oneEuroDerivativeCutoffField =
+        [self makeTextFieldWithAction:@selector(oneEuroFieldChanged:)];
+    [stack addArrangedSubview:make_slider_row(@"Min cutoff",
+                                              _oneEuroMinCutoffSlider,
+                                              _oneEuroMinCutoffField)];
+    [stack addArrangedSubview:make_slider_row(@"Beta", _oneEuroBetaSlider,
+                                              _oneEuroBetaField)];
+    [stack addArrangedSubview:make_slider_row(@"Derivative",
+                                              _oneEuroDerivativeCutoffSlider,
+                                              _oneEuroDerivativeCutoffField)];
+
+    [stack addArrangedSubview:make_spacer(4.0)];
+    [stack addArrangedSubview:make_section_label(@"Preview")];
+    _mirrorPreviewCheckbox = make_checkbox(@"Mirror preview", self,
+                                           @selector(previewOptionsChanged:));
+    _showCameraPreviewCheckbox = make_checkbox(
+        @"Show camera preview", self, @selector(previewOptionsChanged:));
+    _flipLandmarkYCheckbox = make_checkbox(@"Flip landmark Y", self,
+                                           @selector(previewOptionsChanged:));
+    _topLeftOriginCheckbox = make_checkbox(@"Top-left source origin", self,
+                                           @selector(previewOptionsChanged:));
+    [stack addArrangedSubview:_mirrorPreviewCheckbox];
+    [stack addArrangedSubview:_showCameraPreviewCheckbox];
+    [stack addArrangedSubview:_flipLandmarkYCheckbox];
+    [stack addArrangedSubview:_topLeftOriginCheckbox];
+
+    return panel;
+}
+
+- (NSTextField *)makeTextFieldWithAction:(SEL)action {
+    NSTextField *field = [[NSTextField alloc] initWithFrame:NSZeroRect];
+    field.translatesAutoresizingMaskIntoConstraints = NO;
+    field.target = self;
+    field.action = action;
+    field.delegate = self;
+    field.font = [NSFont systemFontOfSize:12.0 weight:NSFontWeightRegular];
+    field.controlSize = NSControlSizeSmall;
+    return field;
+}
+
+- (NSSlider *)makeSliderWithMin:(double)minimum
+                            max:(double)maximum
+                         action:(SEL)action {
+    NSSlider *slider = [[NSSlider alloc] initWithFrame:NSZeroRect];
+    slider.translatesAutoresizingMaskIntoConstraints = NO;
+    slider.minValue = minimum;
+    slider.maxValue = maximum;
+    slider.continuous = YES;
+    slider.target = self;
+    slider.action = action;
+    slider.controlSize = NSControlSizeSmall;
+    return slider;
+}
+
+- (AppleCVATrackingPipeline *)makeTrackingPipeline {
+    AppleCVATrackingPipeline *pipeline = [[AppleCVATrackingPipeline alloc]
+        initWithFullBackend:_useFullBackend
+          captureQueueLabel:@"local.applecva.vts-source.capture"];
+    pipeline.useOneEuroFilter = _enableFilter;
+    pipeline.oneEuroParameters = _oneEuroParameters;
+
+    __weak VTSAppDelegate *weakSelf = self;
+    pipeline.statusHandler = ^(NSString *message, int32_t status) {
+      [weakSelf handlePipelineStatusMessage:message status:status];
+    };
+    pipeline.frameHandler =
+        ^(CVPixelBufferRef pixelBuffer, const AppleCVATrackedFace *face,
+          BOOL hasFace, size_t detectedFaceCount, size_t trackedFaceCount,
+          int32_t status, double timestamp, double fps) {
+          (void)timestamp;
+          [weakSelf handleTrackingPixelBuffer:pixelBuffer
+                                         face:face
+                                      hasFace:hasFace
+                            detectedFaceCount:detectedFaceCount
+                             trackedFaceCount:trackedFaceCount
+                                       status:status
+                                          fps:fps];
+        };
+    return pipeline;
+}
+
+- (void)syncAllControlsFromState {
+    [self syncConnectionControls];
+    [self syncTrackingControls];
+    [self syncOneEuroControls];
+    [self syncPreviewControlsFromView];
+    [self syncControlEnabledStates];
+    [self updateCalibrationControlOnMain];
+}
+
+- (void)syncConnectionControls {
+    _hostField.stringValue = _host ?: @"127.0.0.1";
+    _portField.stringValue = [NSString stringWithFormat:@"%u", _port];
+}
+
+- (void)syncTrackingControls {
+    [_backendPopup selectItemAtIndex:_useFullBackend ? 1 : 0];
+    _useOneEuroCheckbox.state =
+        _enableFilter ? NSControlStateValueOn : NSControlStateValueOff;
+    _customParametersCheckbox.state = _includeCustomParameters
+                                          ? NSControlStateValueOn
+                                          : NSControlStateValueOff;
+    _arkitAliasesCheckbox.state =
+        _includeARKitAliases ? NSControlStateValueOn : NSControlStateValueOff;
+    _acvaBlendshapeCheckbox.state = _includeACVABlendshapeParameters
+                                        ? NSControlStateValueOn
+                                        : NSControlStateValueOff;
+}
+
+- (void)syncOneEuroControls {
+    _oneEuroMinCutoffSlider.doubleValue = _oneEuroParameters.min_cutoff;
+    _oneEuroBetaSlider.doubleValue = _oneEuroParameters.beta;
+    _oneEuroDerivativeCutoffSlider.doubleValue =
+        _oneEuroParameters.derivative_cutoff;
+    _oneEuroMinCutoffField.stringValue =
+        format_float(_oneEuroParameters.min_cutoff, 2);
+    _oneEuroBetaField.stringValue = format_float(_oneEuroParameters.beta, 4);
+    _oneEuroDerivativeCutoffField.stringValue =
+        format_float(_oneEuroParameters.derivative_cutoff, 2);
+}
+
+- (void)syncPreviewControlsFromView {
+    _mirrorPreviewCheckbox.state =
+        _view.mirrorPreview ? NSControlStateValueOn : NSControlStateValueOff;
+    _showCameraPreviewCheckbox.state = _view.showCameraPreview
+                                           ? NSControlStateValueOn
+                                           : NSControlStateValueOff;
+    _flipLandmarkYCheckbox.state = _view.flipLandmarkShapeY
+                                       ? NSControlStateValueOn
+                                       : NSControlStateValueOff;
+    _topLeftOriginCheckbox.state = _view.faceRectUsesTopLeftOrigin
+                                       ? NSControlStateValueOn
+                                       : NSControlStateValueOff;
+}
+
+- (void)syncControlEnabledStates {
+    _arkitAliasesCheckbox.enabled = _includeCustomParameters;
+    _acvaBlendshapeCheckbox.enabled = _includeCustomParameters;
+}
+
+- (void)saveSettings {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    [defaults setObject:_host ?: @"127.0.0.1" forKey:kDefaultsHostKey];
+    [defaults setInteger:_port forKey:kDefaultsPortKey];
+    [defaults setBool:_useFullBackend forKey:kDefaultsUseFullBackendKey];
+    [defaults setBool:_enableFilter forKey:kDefaultsEnableFilterKey];
+    [defaults setBool:_includeCustomParameters
+               forKey:kDefaultsIncludeCustomKey];
+    [defaults setBool:_includeARKitAliases
+               forKey:kDefaultsIncludeARKitAliasesKey];
+    [defaults setBool:_includeACVABlendshapeParameters
+               forKey:kDefaultsIncludeACVABlendshapesKey];
+    if (_view != nil) {
+        [defaults setBool:_view.mirrorPreview forKey:kDefaultsMirrorPreviewKey];
+        [defaults setBool:_view.showCameraPreview
+                   forKey:kDefaultsShowCameraPreviewKey];
+        [defaults setBool:_view.flipLandmarkShapeY
+                   forKey:kDefaultsFlipLandmarkYKey];
+        [defaults setBool:_view.faceRectUsesTopLeftOrigin
+                   forKey:kDefaultsTopLeftOriginKey];
+    }
+    [defaults setDouble:_oneEuroParameters.min_cutoff
+                 forKey:kDefaultsOneEuroMinCutoffKey];
+    [defaults setDouble:_oneEuroParameters.beta forKey:kDefaultsOneEuroBetaKey];
+    [defaults setDouble:_oneEuroParameters.derivative_cutoff
+                 forKey:kDefaultsOneEuroDerivativeCutoffKey];
+}
+
+- (void)connectionChanged:(id)sender {
+    (void)sender;
+    NSString *host = [_hostField.stringValue
+        stringByTrimmingCharactersInSet:NSCharacterSet
+                                            .whitespaceAndNewlineCharacterSet];
+    uint16_t port = 0;
+    if (host.length == 0 || !parse_port(_portField.stringValue, &port)) {
+        NSBeep();
+        [self syncConnectionControls];
+        return;
+    }
+
+    const BOOL changed = ![_host isEqualToString:host] || _port != port;
+    if (!changed) {
+        return;
+    }
+
+    _host = [host copy];
+    _port = port;
+    [self saveSettings];
+    [self stopVTSClient];
+    _view.needsDisplay = YES;
+}
+
+- (void)trackingOptionsChanged:(id)sender {
+    (void)sender;
+    const BOOL newUseFullBackend = _backendPopup.indexOfSelectedItem == 1;
+    const BOOL newEnableFilter =
+        _useOneEuroCheckbox.state == NSControlStateValueOn;
+    const BOOL newIncludeCustom =
+        _customParametersCheckbox.state == NSControlStateValueOn;
+    const BOOL newIncludeAliases =
+        _arkitAliasesCheckbox.state == NSControlStateValueOn;
+    const BOOL newIncludeACVABlendshapes =
+        _acvaBlendshapeCheckbox.state == NSControlStateValueOn;
+
+    const BOOL backendChanged = _useFullBackend != newUseFullBackend;
+    const BOOL injectionChanged =
+        _includeCustomParameters != newIncludeCustom ||
+        _includeARKitAliases != newIncludeAliases ||
+        _includeACVABlendshapeParameters != newIncludeACVABlendshapes;
+
+    _useFullBackend = newUseFullBackend;
+    _enableFilter = newEnableFilter;
+    _includeCustomParameters = newIncludeCustom;
+    _includeARKitAliases = newIncludeAliases;
+    _includeACVABlendshapeParameters = newIncludeACVABlendshapes;
+
+    _view.useFullBackend = _useFullBackend;
+    _view.useOneEuroFilter = _enableFilter;
+    _pipeline.useOneEuroFilter = _enableFilter;
+    _pipeline.oneEuroParameters = _oneEuroParameters;
+
+    if (backendChanged) {
+        [self stopVTSClient];
+        [_pipeline stop];
+        _calibrationController = [[VTSCalibrationController alloc] init];
+        _pipeline = [self makeTrackingPipeline];
+        [_pipeline start];
+    } else if (injectionChanged) {
+        [self stopVTSClient];
+    }
+
+    [self syncTrackingControls];
+    [self syncControlEnabledStates];
+    [self updateCalibrationControlOnMain];
+    [self saveSettings];
+    _view.needsDisplay = YES;
+}
+
+- (void)previewOptionsChanged:(id)sender {
+    (void)sender;
+    _view.mirrorPreview = _mirrorPreviewCheckbox.state == NSControlStateValueOn;
+    _view.showCameraPreview =
+        _showCameraPreviewCheckbox.state == NSControlStateValueOn;
+    _view.flipLandmarkShapeY =
+        _flipLandmarkYCheckbox.state == NSControlStateValueOn;
+    _view.faceRectUsesTopLeftOrigin =
+        _topLeftOriginCheckbox.state == NSControlStateValueOn;
+    [self applyPreviewSettingsFromView];
+}
+
+- (void)applyPreviewSettingsFromView {
+    _enableFilter = _view.useOneEuroFilter;
+    _pipeline.useOneEuroFilter = _enableFilter;
+    _pipeline.oneEuroParameters = _oneEuroParameters;
+    [self syncTrackingControls];
+    [self syncPreviewControlsFromView];
+    [self saveSettings];
+    _view.needsDisplay = YES;
+}
+
+- (void)oneEuroSliderChanged:(id)sender {
+    AppleCVAOneEuroParameters parameters = _oneEuroParameters;
+    if (sender == _oneEuroMinCutoffSlider) {
+        parameters.min_cutoff = (float)_oneEuroMinCutoffSlider.doubleValue;
+    } else if (sender == _oneEuroBetaSlider) {
+        parameters.beta = (float)_oneEuroBetaSlider.doubleValue;
+    } else if (sender == _oneEuroDerivativeCutoffSlider) {
+        parameters.derivative_cutoff =
+            (float)_oneEuroDerivativeCutoffSlider.doubleValue;
+    }
+    [self applyOneEuroParameters:parameters];
+}
+
+- (void)oneEuroFieldChanged:(id)sender {
+    (void)sender;
+    double minCutoff = 0.0;
+    double beta = 0.0;
+    double derivativeCutoff = 0.0;
+    if (!parse_double_value(_oneEuroMinCutoffField.stringValue, &minCutoff) ||
+        !parse_double_value(_oneEuroBetaField.stringValue, &beta) ||
+        !parse_double_value(_oneEuroDerivativeCutoffField.stringValue,
+                            &derivativeCutoff)) {
+        NSBeep();
+        [self syncOneEuroControls];
+        return;
+    }
+
+    AppleCVAOneEuroParameters parameters = _oneEuroParameters;
+    parameters.min_cutoff = (float)minCutoff;
+    parameters.beta = (float)beta;
+    parameters.derivative_cutoff = (float)derivativeCutoff;
+    [self applyOneEuroParameters:parameters];
+}
+
+- (void)applyOneEuroParameters:(AppleCVAOneEuroParameters)parameters {
+    parameters.min_cutoff =
+        (float)clamp_double(parameters.min_cutoff, kOneEuroMinCutoffMinimum,
+                            kOneEuroMinCutoffMaximum);
+    parameters.beta = (float)clamp_double(parameters.beta, kOneEuroBetaMinimum,
+                                          kOneEuroBetaMaximum);
+    parameters.derivative_cutoff = (float)clamp_double(
+        parameters.derivative_cutoff, kOneEuroDerivativeCutoffMinimum,
+        kOneEuroDerivativeCutoffMaximum);
+    _oneEuroParameters = AppleCVAOneEuroParametersSanitize(parameters);
+
+    _pipeline.oneEuroParameters = _oneEuroParameters;
+    _view.oneEuroMinCutoff = _oneEuroParameters.min_cutoff;
+    _view.oneEuroBeta = _oneEuroParameters.beta;
+    _view.oneEuroDerivativeCutoff = _oneEuroParameters.derivative_cutoff;
+    [self syncOneEuroControls];
+    [self saveSettings];
+    _view.needsDisplay = YES;
+}
+
+- (void)controlTextDidEndEditing:(NSNotification *)notification {
+    id object = notification.object;
+    if (object == _hostField || object == _portField) {
+        [self connectionChanged:object];
+        return;
+    }
+    if (object == _oneEuroMinCutoffField || object == _oneEuroBetaField ||
+        object == _oneEuroDerivativeCutoffField) {
+        [self oneEuroFieldChanged:object];
+        return;
+    }
 }
 
 - (void)startCalibration:(id)sender {
@@ -275,6 +902,8 @@ static float parameter_value_for_id(NSArray<NSDictionary *> *parameterValues,
 
 - (NSString *)currentExtraStatusLineWithParameterValues:
     (NSArray<NSDictionary *> *)parameterValues {
+    NSString *targetStatus =
+        [NSString stringWithFormat:@"target %@:%u", _host, _port];
     NSString *customStatus =
         _includeCustomParameters ? @"custom on" : @"custom off";
     NSString *aliasStatus = (_includeCustomParameters && _includeARKitAliases)
@@ -286,16 +915,18 @@ static float parameter_value_for_id(NSArray<NSDictionary *> *parameterValues,
             : @"acva raw off";
     NSString *calibrationStatus = [_calibrationController statusLine];
     if (!_calibrationController.calibrated) {
-        return [NSString stringWithFormat:@"vts locked  %@  %@  %@  %@",
-                                          customStatus, aliasStatus,
-                                          acvaRawStatus, calibrationStatus];
+        return
+            [NSString stringWithFormat:@"vts locked  %@  %@  %@  %@  %@",
+                                       targetStatus, customStatus, aliasStatus,
+                                       acvaRawStatus, calibrationStatus];
     }
 
     VTSClient *client = [self currentVTSClient];
     NSString *vtsStatus = client != nil ? [client statusLine] : @"vts starting";
-    NSString *base = [NSString
-        stringWithFormat:@"%@  %@  %@  %@  %@", vtsStatus, customStatus,
-                         aliasStatus, acvaRawStatus, calibrationStatus];
+    NSString *base =
+        [NSString stringWithFormat:@"%@  %@  %@  %@  %@  %@", vtsStatus,
+                                   targetStatus, customStatus, aliasStatus,
+                                   acvaRawStatus, calibrationStatus];
     if (parameterValues.count == 0) {
         return base;
     }
@@ -342,18 +973,19 @@ static float parameter_value_for_id(NSArray<NSDictionary *> *parameterValues,
 }
 
 - (void)updateCalibrationControlOnMain {
+    NSString *title = @"Calibrate First";
+    BOOL enabled = YES;
     if (_calibrationController.inProgress) {
-        _view.calibrationButtonTitle = @"Calibrating...";
-        _view.calibrationButtonEnabled = NO;
-        return;
+        title = @"Calibrating...";
+        enabled = NO;
+    } else if (_calibrationController.calibrated) {
+        title = @"Recalibrate";
+        enabled = YES;
     }
-    if (_calibrationController.calibrated) {
-        _view.calibrationButtonTitle = @"Recalibrate";
-        _view.calibrationButtonEnabled = YES;
-        return;
-    }
-    _view.calibrationButtonTitle = @"Calibrate First";
-    _view.calibrationButtonEnabled = YES;
+    _calibrationButton.title = title;
+    _calibrationButton.enabled = enabled;
+    _view.calibrationButtonTitle = title;
+    _view.calibrationButtonEnabled = enabled;
 }
 
 @end

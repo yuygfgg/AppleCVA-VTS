@@ -16,6 +16,12 @@ typedef struct {
 } AppleCVAOneEuroScalarFilter;
 
 typedef struct {
+    float min_cutoff;
+    float beta;
+    float derivative_cutoff;
+} AppleCVAOneEuroParameters;
+
+typedef struct {
     bool initialized;
     bool has_timestamp;
     double previous_timestamp;
@@ -47,11 +53,18 @@ bool AppleCVATrackedFaceHasDrawableLandmarks(const AppleCVATrackedFace* face);
 bool AppleCVASelectBestTrackedFace(const AppleCVAFrameResult* result,
                                    AppleCVATrackedFace* out_face);
 
+AppleCVAOneEuroParameters AppleCVAOneEuroParametersDefault(void);
+AppleCVAOneEuroParameters
+AppleCVAOneEuroParametersSanitize(AppleCVAOneEuroParameters parameters);
+
 void AppleCVAFaceOneEuroFilterReset(AppleCVAFaceOneEuroFilter* filter);
 
 void AppleCVAFaceOneEuroFilterApply(AppleCVAFaceOneEuroFilter* filter,
                                     AppleCVATrackedFace* face,
                                     double timestamp);
+void AppleCVAFaceOneEuroFilterApplyWithParameters(
+    AppleCVAFaceOneEuroFilter* filter, AppleCVATrackedFace* face,
+    double timestamp, const AppleCVAOneEuroParameters* parameters);
 
 #ifdef __cplusplus
 }

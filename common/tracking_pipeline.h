@@ -2,6 +2,7 @@
 #define COMMON_TRACKING_PIPELINE_H
 
 #include "applecva.h"
+#include "tracking_utils.h"
 
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
@@ -19,6 +20,7 @@ typedef void (^AppleCVATrackingPipelineFrameHandler)(
 @property(nonatomic, readonly, assign) BOOL running;
 @property(nonatomic, readonly, assign) BOOL useFullBackend;
 @property(nonatomic, assign) BOOL useOneEuroFilter;
+@property(nonatomic, assign) AppleCVAOneEuroParameters oneEuroParameters;
 @property(nonatomic, copy) AppleCVATrackingPipelineStatusHandler statusHandler;
 @property(nonatomic, copy) AppleCVATrackingPipelineFrameHandler frameHandler;
 
