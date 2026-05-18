@@ -7,6 +7,166 @@ endif()
 
 include("@CMAKE_CURRENT_BINARY_DIR@/.qt/QtDeploySupport.cmake")
 
+file(REAL_PATH "${_applecva_app}" _applecva_app_real)
+set(_applecva_app_real_prefix "${_applecva_app_real}/")
+
+function(_applecva_copy_resolved_file source destination)
+    if(NOT EXISTS "${source}")
+        message(FATAL_ERROR "Source file not found: ${source}")
+    endif()
+
+    file(REAL_PATH "${source}" _applecva_resolved_source)
+    if(NOT EXISTS "${_applecva_resolved_source}")
+        message(FATAL_ERROR "Could not resolve source file: ${source}")
+    endif()
+
+    get_filename_component(_applecva_destination_dir "${destination}" DIRECTORY)
+    file(MAKE_DIRECTORY "${_applecva_destination_dir}")
+    file(REMOVE "${destination}")
+
+    execute_process(
+        COMMAND
+            "${CMAKE_COMMAND}" -E copy_if_different
+            "${_applecva_resolved_source}"
+            "${destination}"
+        RESULT_VARIABLE _applecva_copy_result)
+    if(NOT _applecva_copy_result EQUAL 0)
+        message(FATAL_ERROR
+                "Could not copy ${_applecva_resolved_source} to ${destination}")
+    endif()
+    if(NOT EXISTS "${destination}" OR IS_SYMLINK "${destination}")
+        message(FATAL_ERROR
+                "Expected a real file after copy: ${destination}")
+    endif()
+endfunction()
+
+function(_applecva_is_inside_app path result_var)
+    file(REAL_PATH "${path}" _applecva_candidate_real)
+    string(FIND
+        "${_applecva_candidate_real}"
+        "${_applecva_app_real_prefix}"
+        _applecva_inside_index)
+    if(_applecva_inside_index EQUAL 0)
+        set(${result_var} TRUE PARENT_SCOPE)
+    else()
+        set(${result_var} FALSE PARENT_SCOPE)
+    endif()
+endfunction()
+
+function(_applecva_materialize_plugin_symlink plugin_path)
+    if(NOT IS_SYMLINK "${plugin_path}")
+        return()
+    endif()
+
+    file(READ_SYMLINK "${plugin_path}" _applecva_plugin_link_target)
+    get_filename_component(_applecva_plugin_dir "${plugin_path}" DIRECTORY)
+    if(IS_ABSOLUTE "${_applecva_plugin_link_target}")
+        set(_applecva_plugin_target "${_applecva_plugin_link_target}")
+    else()
+        get_filename_component(
+            _applecva_plugin_target
+            "${_applecva_plugin_link_target}"
+            ABSOLUTE
+            BASE_DIR "${_applecva_plugin_dir}")
+    endif()
+
+    if(EXISTS "${_applecva_plugin_target}")
+        _applecva_copy_resolved_file("${_applecva_plugin_target}" "${plugin_path}")
+        return()
+    endif()
+
+    get_filename_component(_applecva_plugin_name "${plugin_path}" NAME)
+    file(GLOB_RECURSE _applecva_plugin_candidates
+         LIST_DIRECTORIES false
+         "${_applecva_qml_source_root}/*/${_applecva_plugin_name}")
+    foreach(_applecva_plugin_candidate IN LISTS _applecva_plugin_candidates)
+        if(EXISTS "${_applecva_plugin_candidate}")
+            _applecva_copy_resolved_file(
+                "${_applecva_plugin_candidate}"
+                "${plugin_path}")
+            return()
+        endif()
+    endforeach()
+
+    message(FATAL_ERROR
+            "Could not resolve plugin symlink: ${plugin_path}")
+endfunction()
+
+function(_applecva_materialize_qml_symlink qml_path)
+    if(NOT IS_SYMLINK "${qml_path}")
+        return()
+    endif()
+
+    file(READ_SYMLINK "${qml_path}" _applecva_qml_link_target)
+    get_filename_component(_applecva_qml_link_dir "${qml_path}" DIRECTORY)
+    if(IS_ABSOLUTE "${_applecva_qml_link_target}")
+        set(_applecva_qml_target "${_applecva_qml_link_target}")
+    else()
+        get_filename_component(
+            _applecva_qml_target
+            "${_applecva_qml_link_target}"
+            ABSOLUTE
+            BASE_DIR "${_applecva_qml_link_dir}")
+    endif()
+
+    if(EXISTS "${_applecva_qml_target}")
+        _applecva_is_inside_app("${_applecva_qml_target}" _applecva_qml_in_app)
+        if(_applecva_qml_in_app)
+            return()
+        endif()
+
+        _applecva_copy_resolved_file("${_applecva_qml_target}" "${qml_path}")
+        return()
+    endif()
+
+    file(RELATIVE_PATH _applecva_qml_rel
+         "${_applecva_qml_dest_root}"
+         "${qml_path}")
+    set(_applecva_qml_source_candidate
+        "${_applecva_qml_source_root}/${_applecva_qml_rel}")
+    if(EXISTS "${_applecva_qml_source_candidate}")
+        _applecva_copy_resolved_file(
+            "${_applecva_qml_source_candidate}"
+            "${qml_path}")
+        return()
+    endif()
+
+    message(FATAL_ERROR
+            "Could not resolve QML resource symlink: ${qml_path}")
+endfunction()
+
+function(_applecva_assert_no_broken_symlinks root)
+    file(GLOB_RECURSE _applecva_symlink_candidates
+         LIST_DIRECTORIES true
+         "${root}/*")
+    foreach(_applecva_symlink_candidate IN LISTS _applecva_symlink_candidates)
+        if(IS_SYMLINK "${_applecva_symlink_candidate}")
+            file(READ_SYMLINK
+                 "${_applecva_symlink_candidate}"
+                 _applecva_symlink_target)
+            get_filename_component(
+                _applecva_symlink_dir
+                "${_applecva_symlink_candidate}"
+                DIRECTORY)
+            if(IS_ABSOLUTE "${_applecva_symlink_target}")
+                set(_applecva_symlink_resolved "${_applecva_symlink_target}")
+            else()
+                get_filename_component(
+                    _applecva_symlink_resolved
+                    "${_applecva_symlink_target}"
+                    ABSOLUTE
+                    BASE_DIR "${_applecva_symlink_dir}")
+            endif()
+            if(NOT EXISTS "${_applecva_symlink_resolved}")
+                message(FATAL_ERROR
+                        "Broken symlink in app bundle: "
+                        "${_applecva_symlink_candidate} -> "
+                        "${_applecva_symlink_target}")
+            endif()
+        endif()
+    endforeach()
+endfunction()
+
 file(REMOVE_RECURSE
     "${_applecva_app}/Contents/PlugIns"
     "${_applecva_app}/Contents/Resources/qml")
@@ -21,83 +181,92 @@ file(REMOVE ${_applecva_stale_framework_dylibs})
 
 qt6_deploy_qml_imports(TARGET vts_source PLUGINS_FOUND _applecva_qml_plugins)
 
-set(_applecva_qml_source_root
-    "${__QT_DEPLOY_QT_INSTALL_PREFIX}/${__QT_DEPLOY_QT_INSTALL_DATA}/qml")
-file(GLOB_RECURSE _applecva_qml_links
-     LIST_DIRECTORIES false
-     "${_applecva_app}/Contents/Resources/qml/*")
-foreach(_applecva_qml_link IN LISTS _applecva_qml_links)
-    if(IS_SYMLINK "${_applecva_qml_link}")
-        file(READ_SYMLINK "${_applecva_qml_link}" _applecva_qml_link_target)
-        if(_applecva_qml_link_target MATCHES "Cellar" OR
-                IS_ABSOLUTE "${_applecva_qml_link_target}")
-            file(RELATIVE_PATH _applecva_qml_link_rel
-                 "${_applecva_app}/Contents/Resources/qml"
-                 "${_applecva_qml_link}")
-            set(_applecva_qml_link_source
-                "${_applecva_qml_source_root}/${_applecva_qml_link_rel}")
-            file(REAL_PATH "${_applecva_qml_link_source}"
-                 _applecva_qml_link_source_real)
-            if(NOT EXISTS "${_applecva_qml_link_source_real}")
-                message(FATAL_ERROR
-                        "Could not resolve QML resource symlink: ${_applecva_qml_link}")
-            endif()
-            get_filename_component(_applecva_qml_link_dest_dir
-                                   "${_applecva_qml_link}" DIRECTORY)
-            file(REMOVE "${_applecva_qml_link}")
-            file(INSTALL
-                "${_applecva_qml_link_source_real}"
-                DESTINATION "${_applecva_qml_link_dest_dir}")
-        endif()
+set(_applecva_qml_source_root "")
+set(_applecva_qml_source_root_candidates)
+if(__QT_DEPLOY_QT_INSTALL_DATA AND
+        IS_ABSOLUTE "${__QT_DEPLOY_QT_INSTALL_DATA}")
+    list(APPEND _applecva_qml_source_root_candidates
+        "${__QT_DEPLOY_QT_INSTALL_DATA}/qml")
+endif()
+list(APPEND _applecva_qml_source_root_candidates
+    "${__QT_DEPLOY_QT_INSTALL_PREFIX}/${__QT_DEPLOY_QT_INSTALL_DATA}/qml"
+    "${__QT_DEPLOY_QT_INSTALL_PREFIX}/qml"
+    "${__QT_DEPLOY_QT_INSTALL_PREFIX}/share/qt/qml")
+if(DEFINED ENV{QT_PREFIX})
+    list(APPEND _applecva_qml_source_root_candidates
+        "$ENV{QT_PREFIX}/qml"
+        "$ENV{QT_PREFIX}/share/qt/qml")
+endif()
+foreach(_applecva_qml_source_root_candidate
+        IN LISTS _applecva_qml_source_root_candidates)
+    if(IS_DIRECTORY "${_applecva_qml_source_root_candidate}")
+        file(REAL_PATH
+             "${_applecva_qml_source_root_candidate}"
+             _applecva_qml_source_root)
+        break()
     endif()
 endforeach()
+if(NOT _applecva_qml_source_root)
+    message(FATAL_ERROR "Qt QML import root not found")
+endif()
+
+set(_applecva_qml_dest_root
+    "${_applecva_app}/Contents/Resources/qml")
 
 foreach(_applecva_qml_plugin IN LISTS _applecva_qml_plugins)
     set(_applecva_qml_plugin_dest
         "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/${_applecva_qml_plugin}")
-    if(IS_SYMLINK "${_applecva_qml_plugin_dest}")
-        get_filename_component(_applecva_qml_plugin_name
-                               "${_applecva_qml_plugin_dest}" NAME)
-        get_filename_component(_applecva_qml_plugin_dest_dir
-                               "${_applecva_qml_plugin_dest}" DIRECTORY)
-        file(GLOB_RECURSE _applecva_qml_plugin_candidates
-             LIST_DIRECTORIES false
-             "${_applecva_qml_source_root}/*/${_applecva_qml_plugin_name}")
-        set(_applecva_qml_plugin_real "")
-        foreach(_applecva_qml_plugin_candidate IN LISTS _applecva_qml_plugin_candidates)
-            file(REAL_PATH "${_applecva_qml_plugin_candidate}"
-                 _applecva_qml_plugin_candidate_real)
-            if(EXISTS "${_applecva_qml_plugin_candidate_real}")
-                set(_applecva_qml_plugin_real
-                    "${_applecva_qml_plugin_candidate_real}")
-                break()
-            endif()
-        endforeach()
-        if(NOT _applecva_qml_plugin_real)
-            message(FATAL_ERROR
-                    "Could not resolve QML plugin symlink: ${_applecva_qml_plugin_dest}")
-        endif()
-        file(REMOVE "${_applecva_qml_plugin_dest}")
-        file(INSTALL
-            "${_applecva_qml_plugin_real}"
-            DESTINATION "${_applecva_qml_plugin_dest_dir}"
-            USE_SOURCE_PERMISSIONS)
-    endif()
+    _applecva_materialize_plugin_symlink("${_applecva_qml_plugin_dest}")
 endforeach()
 
-set(_applecva_platform_plugin_source
-    "${__QT_DEPLOY_QT_INSTALL_PREFIX}/${__QT_DEPLOY_QT_INSTALL_PLUGINS}/platforms/libqcocoa.dylib")
-if(NOT EXISTS "${_applecva_platform_plugin_source}")
+file(GLOB_RECURSE _applecva_qml_links
+     LIST_DIRECTORIES false
+     "${_applecva_qml_dest_root}/*")
+foreach(_applecva_qml_link IN LISTS _applecva_qml_links)
+    _applecva_materialize_qml_symlink("${_applecva_qml_link}")
+endforeach()
+
+set(_applecva_platform_plugin_source "")
+set(_applecva_platform_plugin_roots)
+if(__QT_DEPLOY_QT_INSTALL_PLUGINS AND
+        IS_ABSOLUTE "${__QT_DEPLOY_QT_INSTALL_PLUGINS}")
+    list(APPEND _applecva_platform_plugin_roots
+        "${__QT_DEPLOY_QT_INSTALL_PLUGINS}")
+endif()
+list(APPEND _applecva_platform_plugin_roots
+    "${__QT_DEPLOY_QT_INSTALL_PREFIX}/${__QT_DEPLOY_QT_INSTALL_PLUGINS}"
+    "${__QT_DEPLOY_QT_INSTALL_PREFIX}/plugins"
+    "${__QT_DEPLOY_QT_INSTALL_PREFIX}/share/qt/plugins"
+    "${__QT_DEPLOY_QT_INSTALL_PREFIX}/lib/qt6/plugins")
+if(DEFINED ENV{QT_PREFIX})
+    list(APPEND _applecva_platform_plugin_roots
+        "$ENV{QT_PREFIX}/plugins"
+        "$ENV{QT_PREFIX}/share/qt/plugins"
+        "$ENV{QT_PREFIX}/lib/qt6/plugins")
+endif()
+foreach(_applecva_platform_plugin_root
+        IN LISTS _applecva_platform_plugin_roots)
+    set(_applecva_platform_plugin_candidate
+        "${_applecva_platform_plugin_root}/platforms/libqcocoa.dylib")
+    if(EXISTS "${_applecva_platform_plugin_candidate}")
+        file(REAL_PATH
+             "${_applecva_platform_plugin_candidate}"
+             _applecva_platform_plugin_source)
+        break()
+    endif()
+endforeach()
+if(NOT _applecva_platform_plugin_source)
     message(FATAL_ERROR
-            "Qt Cocoa platform plugin not found: ${_applecva_platform_plugin_source}")
+            "Qt Cocoa platform plugin not found")
 endif()
 
 set(_applecva_platform_plugin_rel
     "${_applecva_app_rel}/Contents/PlugIns/platforms/libqcocoa.dylib")
-file(INSTALL
+set(_applecva_platform_plugin_dest
+    "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/${_applecva_platform_plugin_rel}")
+_applecva_copy_resolved_file(
     "${_applecva_platform_plugin_source}"
-    DESTINATION "${_applecva_app}/Contents/PlugIns/platforms"
-    USE_SOURCE_PERMISSIONS)
+    "${_applecva_platform_plugin_dest}")
 
 qt6_deploy_runtime_dependencies(
     EXECUTABLE "${_applecva_app_rel}"
@@ -109,6 +278,8 @@ qt6_deploy_runtime_dependencies(
     DEPLOY_TOOL_OPTIONS
         "-no-strip"
         "-no-codesign")
+
+_applecva_assert_no_broken_symlinks("${_applecva_app}/Contents")
 
 execute_process(
     COMMAND
