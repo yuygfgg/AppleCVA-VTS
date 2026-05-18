@@ -2,27 +2,6 @@
 
 macOS VTube Studio tracking source based on AppleCVA face tracking.
 
-## Build
-
-```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release
-```
-
-This builds `build/AppleCVA VTS Source.app`. To use a specific signing identity, configure with `-DAPPLECVA_CODESIGN_IDENTITY="Developer ID Application: ..."` instead.
-
-## Package App
-
-Build a local release zip containing the `.app` bundle:
-
-```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release --parallel
-cmake --build build --config Release --target package
-```
-
-The package is written to `build/AppleCVA-VTS-Source-0.1.0-macos.zip` with a matching SHA-256 checksum file.
-
 ## Run
 
 ```sh
@@ -69,3 +48,22 @@ The app window must be focused. Shortcuts are ignored while editing Host or Port
 | `b` | Toggle face rectangle and landmark coordinate origin handling.      |
 | `e` | Toggle One Euro Filter smoothing for both preview and emitted data. |
 | `c` | Calibrate neutral pose.                                             |
+
+## Build
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
+```
+
+This builds `build/AppleCVA VTS Source.app`. To use a specific signing identity, configure with `-DAPPLECVA_CODESIGN_IDENTITY="Developer ID Application: ..."`.
+
+## Package App
+
+Build a local release zip containing the `.app` bundle:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release --parallel
+cmake --build build --config Release --target package
+```

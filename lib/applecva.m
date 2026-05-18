@@ -371,10 +371,8 @@ void AppleCVAMakeDefaultCameraParameters(size_t width, size_t height,
         (float)width / kAppleCVAFaceTrackingIntrinsicsWidth;
     const float height_scale =
         (float)height / kAppleCVAFaceTrackingIntrinsicsHeight;
-    params->intrinsics[0] =
-        kAppleCVAFaceTrackingIntrinsicsFx * width_scale;
-    params->intrinsics[4] =
-        kAppleCVAFaceTrackingIntrinsicsFy * height_scale;
+    params->intrinsics[0] = kAppleCVAFaceTrackingIntrinsicsFx * width_scale;
+    params->intrinsics[4] = kAppleCVAFaceTrackingIntrinsicsFy * height_scale;
     params->intrinsics[2] = kAppleCVAFaceTrackingIntrinsicsCx * width_scale;
     params->intrinsics[5] = kAppleCVAFaceTrackingIntrinsicsCy * height_scale;
     params->intrinsics[8] = 1.0f;
@@ -1146,8 +1144,7 @@ static bool detected_face_rect_is_plausible(const AppleCVADetectedFace *face) {
 
 static size_t full_api_prepare_detected_faces(
     const AppleCVADetectedFace *detected_faces, size_t detected_face_count,
-    AppleCVADetectedFace *out_faces,
-    size_t out_face_capacity) {
+    AppleCVADetectedFace *out_faces, size_t out_face_capacity) {
     size_t valid_count = 0;
     const size_t input_limit = detected_face_count < out_face_capacity
                                    ? detected_face_count
