@@ -12,16 +12,16 @@ The app injects available default VTS tracking parameters and, by default, creat
 
 All runtime settings are configured in the right-side panel and are saved for the next launch:
 
-| Setting                        | Purpose                                                                                                                        |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-| Host / Port                    | VTube Studio websocket target.                                                                                                 |
-| Inject custom parameters       | Enable derived `ACVA...` custom parameter creation and injection.                                                              |
-| Include ARKit aliases          | Create ARKit-style custom aliases when VTS does not expose matching defaults.                                                  |
-| Fill raw ACVA blendshapes      | Use remaining VTS custom slots for raw `ACVA...` blendshape channels.                                                          |
-| Backend                        | Switch between full and lite AppleCVA backend. Full is the default. Changing backend restarts tracking and clears calibration. |
-| Use One Euro filter            | Toggle smoothing for preview and emitted VTS data.                                                                             |
-| Min cutoff / Beta / Derivative | Tune the One Euro filter parameters live.                                                                                      |
-| Preview toggles                | Mirror preview, camera visibility, landmark Y flip, and source-origin handling.                                                |
+| Setting                        | Purpose                                                                                                                                                                                                                                   |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Host / Port                    | VTube Studio websocket target.                                                                                                                                                                                                            |
+| Inject custom parameters       | Enable derived `ACVA...` custom parameter creation and injection.                                                                                                                                                                         |
+| Include ARKit aliases          | Create ARKit-style custom aliases when VTS does not expose matching defaults.                                                                                                                                                             |
+| Fill raw ACVA blendshapes      | Use remaining VTS custom slots for raw `ACVA...` blendshape channels.                                                                                                                                                                     |
+| Backend                        | Switch between auto, full, and lite AppleCVA backend modes. Auto is the default: it uses full when full tracks a face and uses lite only when full returns zero tracked faces. Changing backend restarts tracking and clears calibration. |
+| Use One Euro filter            | Toggle smoothing for preview and emitted VTS data.                                                                                                                                                                                        |
+| Min cutoff / Beta / Derivative | Tune the One Euro filter parameters live.                                                                                                                                                                                                 |
+| Preview toggles                | Mirror preview, camera visibility, landmark Y flip, and source-origin handling.                                                                                                                                                           |
 
 ### One Euro Tuning
 

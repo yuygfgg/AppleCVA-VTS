@@ -144,6 +144,7 @@ struct AppleCVATracker {
     CVAFaceTrackingLiteRef tracker;
     CVAFaceTrackingRef full_tracker;
     CFDictionaryRef full_last_output;
+    AppleCVABackendMode last_output_backend_mode;
 };
 
 static CFStringRef key_from_symbol(void *handle, const char *name) {
@@ -355,7 +356,7 @@ void AppleCVAConfigInit(AppleCVAConfig *config) {
         return;
     }
     memset(config, 0, sizeof(*config));
-    config->use_full_api = false;
+    config->backend_mode = APPLECVA_BACKEND_MODE_LITE;
 }
 
 void AppleCVAMakeDefaultCameraParameters(size_t width, size_t height,
@@ -810,11 +811,24 @@ static uint32_t effective_lux_level(const AppleCVATracker *tracker,
     return (lux_level != 0) ? lux_level : APPLECVA_DEFAULT_LUX_LEVEL;
 }
 
+static AppleCVABackendMode
+sanitize_backend_mode(AppleCVABackendMode backend_mode) {
+    switch (backend_mode) {
+    case APPLECVA_BACKEND_MODE_LITE:
+    case APPLECVA_BACKEND_MODE_FULL:
+    case APPLECVA_BACKEND_MODE_AUTO:
+        return backend_mode;
+    default:
+        return APPLECVA_BACKEND_MODE_LITE;
+    }
+}
+
 static void tracker_apply_config(AppleCVATracker *tracker,
                                  const AppleCVAConfig *config) {
     AppleCVAConfigInit(&tracker->config);
     if (config != NULL) {
-        tracker->config = *config;
+        tracker->config.backend_mode =
+            sanitize_backend_mode(config->backend_mode);
     }
 }
 
@@ -879,6 +893,41 @@ static int32_t tracker_create_lite_backend(AppleCVATracker *tracker) {
     return APPLECVA_OK;
 }
 
+static int32_t tracker_create_auto_backend(AppleCVATracker *tracker) {
+    const int32_t lite_status = tracker_create_lite_backend(tracker);
+    if (lite_status != APPLECVA_OK) {
+        return lite_status;
+    }
+
+    const int32_t full_status = tracker_create_full_backend(tracker);
+    if (full_status != APPLECVA_OK) {
+        trace_log("auto backend full creation failed: %d", full_status);
+        if (tracker->full_tracker != NULL) {
+            CFRelease((CFTypeRef)tracker->full_tracker);
+            tracker->full_tracker = NULL;
+        }
+        if (tracker->full_last_output != NULL) {
+            CFRelease(tracker->full_last_output);
+            tracker->full_last_output = NULL;
+        }
+        unload_full_api(&tracker->full_api);
+    }
+
+    return APPLECVA_OK;
+}
+
+static int32_t tracker_create_configured_backend(AppleCVATracker *tracker) {
+    switch (tracker->config.backend_mode) {
+    case APPLECVA_BACKEND_MODE_LITE:
+        return tracker_create_lite_backend(tracker);
+    case APPLECVA_BACKEND_MODE_FULL:
+        return tracker_create_full_backend(tracker);
+    case APPLECVA_BACKEND_MODE_AUTO:
+        return tracker_create_auto_backend(tracker);
+    }
+    return APPLECVA_ERR_INVALID_ARGUMENT;
+}
+
 int32_t AppleCVATrackerCreate(const AppleCVAConfig *config,
                               AppleCVATracker **out_tracker) {
     if (out_tracker == NULL) {
@@ -893,9 +942,7 @@ int32_t AppleCVATrackerCreate(const AppleCVAConfig *config,
 
     tracker_apply_config(tracker, config);
 
-    const int32_t status = tracker->config.use_full_api
-                               ? tracker_create_full_backend(tracker)
-                               : tracker_create_lite_backend(tracker);
+    const int32_t status = tracker_create_configured_backend(tracker);
     if (status != APPLECVA_OK) {
         tracker_release_runtime(tracker);
         free(tracker);
@@ -1029,7 +1076,9 @@ cleanup:
 int32_t AppleCVATrackerCopyRawDecodedOutput(AppleCVATracker *tracker,
                                             CFDictionaryRef *out_decoded_output,
                                             bool *out_aux_flag) {
-    if (tracker != NULL && tracker->config.use_full_api) {
+    if (tracker != NULL &&
+        (tracker->config.backend_mode == APPLECVA_BACKEND_MODE_FULL ||
+         tracker->last_output_backend_mode == APPLECVA_BACKEND_MODE_FULL)) {
         if (out_decoded_output == NULL) {
             return APPLECVA_ERR_INVALID_ARGUMENT;
         }
@@ -1196,7 +1245,8 @@ process_frame_full_api(AppleCVATracker *tracker, CVPixelBufferRef input_buffer,
                        const AppleCVACameraParameters *camera_parameters,
                        const AppleCVADetectedFace *detected_faces,
                        size_t detected_face_count, double timestamp_seconds,
-                       uint32_t lux_level, AppleCVAFrameResult *out_result) {
+                       uint32_t lux_level, uint64_t callback_timeout_ns,
+                       AppleCVAFrameResult *out_result) {
     const AppleCVAFullKeys *keys = &tracker->full_api.keys;
     NSDictionary *camera = full_api_camera_dictionary(keys, camera_parameters);
     AppleCVADetectedFace prepared_faces[APPLECVA_FULL_MAX_INPUT_FACES];
@@ -1241,7 +1291,7 @@ process_frame_full_api(AppleCVATracker *tracker, CVPixelBufferRef input_buffer,
     }
 
     dispatch_time_t deadline =
-        dispatch_time(DISPATCH_TIME_NOW, APPLECVA_FULL_CALLBACK_TIMEOUT_NS);
+        dispatch_time(DISPATCH_TIME_NOW, (int64_t)callback_timeout_ns);
     (void)dispatch_semaphore_wait(semaphore, deadline);
     if (callback_output == NULL) {
         return APPLECVA_ERR_DECODE_FAILED;
@@ -1251,6 +1301,7 @@ process_frame_full_api(AppleCVATracker *tracker, CVPixelBufferRef input_buffer,
     out_result->aux_flag = false;
     fill_frame_result_from_output(callback_output, out_result);
     trace_full_output(callback_output);
+    tracker->last_output_backend_mode = APPLECVA_BACKEND_MODE_FULL;
     return APPLECVA_OK;
 }
 
@@ -1354,7 +1405,42 @@ process_frame_lite_api(AppleCVATracker *tracker, CVPixelBufferRef input_buffer,
     fill_frame_result_from_output(decoded_output, out_result);
 
     CFRelease(decoded_output);
+    tracker->last_output_backend_mode = APPLECVA_BACKEND_MODE_LITE;
     return APPLECVA_OK;
+}
+
+static int32_t
+process_frame_auto_api(AppleCVATracker *tracker, CVPixelBufferRef input_buffer,
+                       const AppleCVACameraParameters *camera_parameters,
+                       const AppleCVADetectedFace *detected_faces,
+                       size_t detected_face_count, double timestamp_seconds,
+                       uint32_t lux_level, AppleCVAFrameResult *out_result) {
+    if (tracker->full_tracker == NULL) {
+        trace_log("auto backend full unavailable; using lite output");
+        return process_frame_lite_api(tracker, input_buffer, camera_parameters,
+                                      detected_faces, detected_face_count,
+                                      timestamp_seconds, lux_level,
+                                      out_result);
+    }
+
+    const int32_t full_status = process_frame_full_api(
+        tracker, input_buffer, camera_parameters, detected_faces,
+        detected_face_count, timestamp_seconds, lux_level,
+        APPLECVA_FULL_CALLBACK_TIMEOUT_NS, out_result);
+    if (full_status != APPLECVA_OK) {
+        return full_status;
+    }
+    if (out_result->tracked_face_count != 0) {
+        trace_log("auto backend using full output");
+        return APPLECVA_OK;
+    }
+
+    trace_log("auto backend full tracked=0; falling back to lite output");
+    AppleCVAFrameResultClear(out_result);
+    out_result->timestamp_seconds = timestamp_seconds;
+    return process_frame_lite_api(tracker, input_buffer, camera_parameters,
+                                  detected_faces, detected_face_count,
+                                  timestamp_seconds, lux_level, out_result);
 }
 
 int32_t AppleCVATrackerProcessFrame(
@@ -1383,8 +1469,14 @@ int32_t AppleCVATrackerProcessFrame(
         return wrapper_status;
     }
 
-    if (tracker->config.use_full_api) {
-        return process_frame_full_api(tracker, pixel_buffer, camera_parameters,
+    if (tracker->config.backend_mode == APPLECVA_BACKEND_MODE_FULL) {
+        return process_frame_full_api(
+            tracker, pixel_buffer, camera_parameters, detected_faces,
+            detected_face_count, timestamp_seconds, lux_level,
+            APPLECVA_FULL_CALLBACK_TIMEOUT_NS, out_result);
+    }
+    if (tracker->config.backend_mode == APPLECVA_BACKEND_MODE_AUTO) {
+        return process_frame_auto_api(tracker, pixel_buffer, camera_parameters,
                                       detected_faces, detected_face_count,
                                       timestamp_seconds, lux_level, out_result);
     }

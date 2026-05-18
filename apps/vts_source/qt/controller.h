@@ -15,8 +15,8 @@ class VTSController final : public QObject {
     Q_PROPERTY(
         QStringList cameraNames READ cameraNames NOTIFY cameraNamesChanged)
     Q_PROPERTY(int cameraIndex READ cameraIndex NOTIFY cameraIndexChanged)
-    Q_PROPERTY(bool useFullBackend READ useFullBackend WRITE setUseFullBackend
-                   NOTIFY useFullBackendChanged)
+    Q_PROPERTY(int backendMode READ backendMode WRITE setBackendMode NOTIFY
+                   backendModeChanged)
     Q_PROPERTY(bool enableFilter READ enableFilter WRITE setEnableFilter NOTIFY
                    enableFilterChanged)
     Q_PROPERTY(
@@ -72,8 +72,8 @@ class VTSController final : public QObject {
     QStringList cameraNames() const;
     int cameraIndex() const;
 
-    bool useFullBackend() const;
-    void setUseFullBackend(bool enabled);
+    int backendMode() const;
+    void setBackendMode(int mode);
 
     bool enableFilter() const;
     void setEnableFilter(bool enabled);
@@ -135,7 +135,7 @@ class VTSController final : public QObject {
     void portChanged();
     void cameraNamesChanged();
     void cameraIndexChanged();
-    void useFullBackendChanged();
+    void backendModeChanged();
     void enableFilterChanged();
     void includeCustomParametersChanged();
     void includeARKitAliasesChanged();

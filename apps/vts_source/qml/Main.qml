@@ -267,11 +267,11 @@ ApplicationWindow {
                         }
 
                         VTSComboBox {
-                            model: ["Lite backend", "Full backend"]
-                            currentIndex: controller.useFullBackend ? 1 : 0
+                            model: ["Lite backend", "Full backend", "Auto backend"]
+                            currentIndex: controller.backendMode
                             Layout.fillWidth: true
                             onActivated: (index) => {
-                                return controller.useFullBackend = (index === 1);
+                                return controller.backendMode = index;
                             }
                         }
 

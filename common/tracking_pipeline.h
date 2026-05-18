@@ -20,16 +20,16 @@ typedef void (^AppleCVATrackingPipelineFrameHandler)(
 @interface AppleCVATrackingPipeline : NSObject
 
 @property(nonatomic, readonly, assign) BOOL running;
-@property(nonatomic, readonly, assign) BOOL useFullBackend;
+@property(nonatomic, readonly, assign) AppleCVABackendMode backendMode;
 @property(nonatomic, readonly, strong) AVCaptureDevice *captureDevice;
 @property(nonatomic, assign) BOOL useOneEuroFilter;
 @property(nonatomic, assign) AppleCVAOneEuroParameters oneEuroParameters;
 @property(nonatomic, copy) AppleCVATrackingPipelineStatusHandler statusHandler;
 @property(nonatomic, copy) AppleCVATrackingPipelineFrameHandler frameHandler;
 
-- (instancetype)initWithFullBackend:(BOOL)useFullBackend
+- (instancetype)initWithBackendMode:(AppleCVABackendMode)backendMode
                   captureQueueLabel:(NSString *)captureQueueLabel;
-- (instancetype)initWithFullBackend:(BOOL)useFullBackend
+- (instancetype)initWithBackendMode:(AppleCVABackendMode)backendMode
                       captureDevice:(AVCaptureDevice *)captureDevice
                   captureQueueLabel:(NSString *)captureQueueLabel;
 - (void)start;

@@ -14,9 +14,26 @@ static const uint32_t kAppleCVAPipelineVisionOrientation = 1;
 @interface AppleCVATrackingPipeline () <
     AVCaptureVideoDataOutputSampleBufferDelegate>
 @property(nonatomic, readwrite, assign) BOOL running;
-@property(nonatomic, readwrite, assign) BOOL useFullBackend;
+@property(nonatomic, readwrite, assign) AppleCVABackendMode backendMode;
 @property(nonatomic, readwrite, strong) AVCaptureDevice *captureDevice;
 @end
+
+static AppleCVABackendMode
+normalize_backend_mode(AppleCVABackendMode backendMode) {
+    switch (backendMode) {
+    case APPLECVA_BACKEND_MODE_LITE:
+    case APPLECVA_BACKEND_MODE_FULL:
+    case APPLECVA_BACKEND_MODE_AUTO:
+        return backendMode;
+    default:
+        return APPLECVA_BACKEND_MODE_LITE;
+    }
+}
+
+static BOOL
+backend_mode_prefers_full_capture_preset(AppleCVABackendMode backendMode) {
+    return backendMode != APPLECVA_BACKEND_MODE_LITE;
+}
 
 @implementation AppleCVATrackingPipeline {
     NSString *_captureQueueLabel;
@@ -41,19 +58,19 @@ static const uint32_t kAppleCVAPipelineVisionOrientation = 1;
     AppleCVAOneEuroParameters _lastAppliedOneEuroParameters;
 }
 
-- (instancetype)initWithFullBackend:(BOOL)useFullBackend
+- (instancetype)initWithBackendMode:(AppleCVABackendMode)backendMode
                   captureQueueLabel:(NSString *)captureQueueLabel {
-    return [self initWithFullBackend:useFullBackend
+    return [self initWithBackendMode:backendMode
                        captureDevice:nil
                    captureQueueLabel:captureQueueLabel];
 }
 
-- (instancetype)initWithFullBackend:(BOOL)useFullBackend
+- (instancetype)initWithBackendMode:(AppleCVABackendMode)backendMode
                       captureDevice:(AVCaptureDevice *)captureDevice
                   captureQueueLabel:(NSString *)captureQueueLabel {
     self = [super init];
     if (self != nil) {
-        _useFullBackend = useFullBackend;
+        _backendMode = normalize_backend_mode(backendMode);
         _captureDevice = captureDevice;
         _useOneEuroFilter = YES;
         _oneEuroParameters = AppleCVAOneEuroParametersDefault();
@@ -115,7 +132,7 @@ static const uint32_t kAppleCVAPipelineVisionOrientation = 1;
 
     AppleCVAConfig config;
     AppleCVAConfigInit(&config);
-    config.use_full_api = self.useFullBackend;
+    config.backend_mode = self.backendMode;
     return AppleCVATrackerCreate(&config, &_tracker);
 }
 
@@ -140,9 +157,10 @@ static const uint32_t kAppleCVAPipelineVisionOrientation = 1;
     }
 
     AVCaptureSession *session = [[AVCaptureSession alloc] init];
-    session.sessionPreset = self.useFullBackend
-                                ? AVCaptureSessionPreset640x480
-                                : AVCaptureSessionPreset1280x720;
+    session.sessionPreset =
+        backend_mode_prefers_full_capture_preset(self.backendMode)
+            ? AVCaptureSessionPreset640x480
+            : AVCaptureSessionPreset1280x720;
     if (![session canAddInput:input]) {
         [self deliverStatusMessage:@"Could not add camera input."
                             status:APPLECVA_OK];

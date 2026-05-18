@@ -3,9 +3,9 @@
 #include "calibration.h"
 #include "client.h"
 #include "parameters.h"
+#include "preview_item.h"
 #include "tracking_pipeline.h"
 #include "tracking_utils.h"
-#include "preview_item.h"
 
 #include <AVFoundation/AVFoundation.h>
 #include <CoreVideo/CoreVideo.h>
@@ -22,6 +22,7 @@
 #include <mutex>
 
 static const uint16_t kDefaultVTSPort = 8001;
+static const int kDefaultBackendMode = APPLECVA_BACKEND_MODE_AUTO;
 static const double kOneEuroMinCutoffMinimum = 0.01;
 static const double kOneEuroMinCutoffMaximum = 10.0;
 static const double kOneEuroBetaMinimum = 0.0;
@@ -31,7 +32,7 @@ static const double kOneEuroDerivativeCutoffMaximum = 10.0;
 
 static NSString *const kDefaultsHostKey = @"vts_source.host";
 static NSString *const kDefaultsPortKey = @"vts_source.port";
-static NSString *const kDefaultsUseFullBackendKey = @"vts_source.full_backend";
+static NSString *const kDefaultsBackendModeKey = @"vts_source.backend_mode";
 static NSString *const kDefaultsEnableFilterKey = @"vts_source.enable_filter";
 static NSString *const kDefaultsIncludeCustomKey = @"vts_source.include_custom";
 static NSString *const kDefaultsIncludeARKitAliasesKey =
@@ -59,7 +60,7 @@ struct VTSController::Impl {
 
     QString host = QStringLiteral("127.0.0.1");
     int port = kDefaultVTSPort;
-    bool useFullBackend = true;
+    int backendMode = kDefaultBackendMode;
     bool enableFilter = true;
     bool includeCustomParameters = true;
     bool includeARKitAliases = true;
@@ -98,7 +99,7 @@ struct VTSController::Impl {
 struct SettingsSnapshot {
     QString host;
     int port = kDefaultVTSPort;
-    bool useFullBackend = true;
+    int backendMode = kDefaultBackendMode;
     bool enableFilter = true;
     bool includeCustomParameters = true;
     bool includeARKitAliases = true;
@@ -127,6 +128,13 @@ static BOOL default_bool(NSString *key, BOOL fallback) {
                                                            : fallback;
 }
 
+static int default_int(NSString *key, int fallback) {
+    id value = [NSUserDefaults.standardUserDefaults objectForKey:key];
+    return [value respondsToSelector:@selector(integerValue)]
+               ? static_cast<int>([value integerValue])
+               : fallback;
+}
+
 static double default_double(NSString *key, double fallback) {
     id value = [NSUserDefaults.standardUserDefaults objectForKey:key];
     return [value respondsToSelector:@selector(doubleValue)]
@@ -141,12 +149,23 @@ static double clamp_double(double value, double minimum, double maximum) {
     return std::min(std::max(value, minimum), maximum);
 }
 
+static int sanitize_backend_mode(int mode) {
+    switch (mode) {
+    case APPLECVA_BACKEND_MODE_LITE:
+    case APPLECVA_BACKEND_MODE_FULL:
+    case APPLECVA_BACKEND_MODE_AUTO:
+        return mode;
+    default:
+        return kDefaultBackendMode;
+    }
+}
+
 static SettingsSnapshot snapshotSettings(const VTSController::Impl *impl) {
     std::lock_guard<std::mutex> lock(impl->settingsMutex);
     SettingsSnapshot snapshot;
     snapshot.host = impl->host;
     snapshot.port = impl->port;
-    snapshot.useFullBackend = impl->useFullBackend;
+    snapshot.backendMode = impl->backendMode;
     snapshot.enableFilter = impl->enableFilter;
     snapshot.includeCustomParameters = impl->includeCustomParameters;
     snapshot.includeARKitAliases = impl->includeARKitAliases;
@@ -453,20 +472,21 @@ QStringList VTSController::cameraNames() const { return d->cameraNames; }
 
 int VTSController::cameraIndex() const { return d->cameraIndex; }
 
-bool VTSController::useFullBackend() const {
-    return snapshotSettings(d.get()).useFullBackend;
+int VTSController::backendMode() const {
+    return snapshotSettings(d.get()).backendMode;
 }
 
-void VTSController::setUseFullBackend(bool enabled) {
+void VTSController::setBackendMode(int mode) {
+    const int backendMode = sanitize_backend_mode(mode);
     {
         std::lock_guard<std::mutex> lock(d->settingsMutex);
-        if (d->useFullBackend == enabled) {
+        if (d->backendMode == backendMode) {
             return;
         }
-        d->useFullBackend = enabled;
+        d->backendMode = backendMode;
     }
     saveSettings();
-    emit useFullBackendChanged();
+    emit backendModeChanged();
     restartTrackingPipeline(true);
 }
 
@@ -769,7 +789,8 @@ void VTSController::loadSettings() {
     const NSInteger port = [defaults integerForKey:kDefaultsPortKey];
     settings.port = (port > 0 && port <= UINT16_MAX) ? static_cast<int>(port)
                                                      : kDefaultVTSPort;
-    settings.useFullBackend = default_bool(kDefaultsUseFullBackendKey, YES);
+    settings.backendMode = sanitize_backend_mode(
+        default_int(kDefaultsBackendModeKey, kDefaultBackendMode));
     settings.enableFilter = default_bool(kDefaultsEnableFilterKey, YES);
     settings.includeCustomParameters =
         default_bool(kDefaultsIncludeCustomKey, YES);
@@ -804,7 +825,7 @@ void VTSController::loadSettings() {
         std::lock_guard<std::mutex> lock(d->settingsMutex);
         d->host = settings.host;
         d->port = settings.port;
-        d->useFullBackend = settings.useFullBackend;
+        d->backendMode = settings.backendMode;
         d->enableFilter = settings.enableFilter;
         d->includeCustomParameters = settings.includeCustomParameters;
         d->includeARKitAliases = settings.includeARKitAliases;
@@ -825,8 +846,7 @@ void VTSController::saveSettings() {
     [defaults setObject:nsStringFromQString(settings.host)
                  forKey:kDefaultsHostKey];
     [defaults setInteger:settings.port forKey:kDefaultsPortKey];
-    [defaults setBool:settings.useFullBackend
-               forKey:kDefaultsUseFullBackendKey];
+    [defaults setInteger:settings.backendMode forKey:kDefaultsBackendModeKey];
     [defaults setBool:settings.enableFilter forKey:kDefaultsEnableFilterKey];
     [defaults setBool:settings.includeCustomParameters
                forKey:kDefaultsIncludeCustomKey];
@@ -949,7 +969,8 @@ void VTSController::restartTrackingPipeline(bool resetCalibration) {
     const SettingsSnapshot settings = snapshotSettings(d.get());
     AVCaptureDevice *device = selectedCameraDevice(d.get());
     AppleCVATrackingPipeline *pipeline = [[AppleCVATrackingPipeline alloc]
-        initWithFullBackend:settings.useFullBackend
+        initWithBackendMode:static_cast<AppleCVABackendMode>(
+                                settings.backendMode)
               captureDevice:device
           captureQueueLabel:@"local.applecva.vts-source.capture"];
     pipeline.useOneEuroFilter = settings.enableFilter;

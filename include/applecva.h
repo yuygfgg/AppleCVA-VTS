@@ -86,10 +86,17 @@ static const char* const AppleCVALandmarkNames[APPLECVA_MAX_LANDMARKS] = {
 /** Opaque stateful AppleCVA tracker wrapper. */
 typedef struct AppleCVATracker AppleCVATracker;
 
+/** AppleCVA processing backend selection. */
+typedef enum {
+    APPLECVA_BACKEND_MODE_LITE = 0,
+    APPLECVA_BACKEND_MODE_FULL = 1,
+    APPLECVA_BACKEND_MODE_AUTO = 2,
+} AppleCVABackendMode;
+
 /** Tracker configuration used at creation time. */
 typedef struct {
-    /** Use the NSDictionary-based full AppleCVA face tracking backend. */
-    bool use_full_api;
+    /** Processing backend mode. */
+    AppleCVABackendMode backend_mode;
 } AppleCVAConfig;
 
 /** Input face rectangle for AppleCVATrackerProcessFrame. */
