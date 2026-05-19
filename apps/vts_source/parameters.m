@@ -153,6 +153,8 @@ typedef struct {
 typedef enum {
     VTSAppleCVABlendshapeEyeBlinkLeft = 0,
     VTSAppleCVABlendshapeEyeBlinkRight = 1,
+    VTSAppleCVABlendshapeEyeSquintLeft = 2,
+    VTSAppleCVABlendshapeEyeSquintRight = 3,
     VTSAppleCVABlendshapeEyeWideLeft = 8,
     VTSAppleCVABlendshapeEyeWideRight = 9,
     VTSAppleCVABlendshapeBrowDownLeft = 14,
@@ -573,13 +575,12 @@ static float eye_open_from_landmarks(const AppleCVATrackedFace *face,
     return remap_clamped(ratio, 0.03f, 0.19f, 0.0f, 1.0f);
 }
 
-static float
-eye_open_value(const AppleCVATrackedFace *face, BOOL leftEye,
-               const VTSAppleCVACalibration *calibration,
-               const VTSAppleCVASensitivityParameters *sensitivity) {
+static float eye_open_measurement(const AppleCVATrackedFace *face,
+                                  BOOL leftEye) {
     if (face == NULL) {
         return 1.0f;
     }
+
     const size_t blinkIndex = leftEye ? VTSAppleCVABlendshapeEyeBlinkLeft
                                       : VTSAppleCVABlendshapeEyeBlinkRight;
     const size_t wideIndex = leftEye ? VTSAppleCVABlendshapeEyeWideLeft
@@ -593,7 +594,17 @@ eye_open_value(const AppleCVATrackedFace *face, BOOL leftEye,
     if (blinkClosed < 0.2f) {
         value += blendshape_at(face, wideIndex) * 0.15f;
     }
-    value = clamp01(value);
+    return clamp01(value);
+}
+
+static float
+eye_open_value(const AppleCVATrackedFace *face, BOOL leftEye,
+               const VTSAppleCVACalibration *calibration,
+               const VTSAppleCVASensitivityParameters *sensitivity) {
+    if (face == NULL) {
+        return 1.0f;
+    }
+    const float value = eye_open_measurement(face, leftEye);
     if (sensitivity == NULL) {
         return value;
     }
@@ -610,6 +621,25 @@ eye_open_value(const AppleCVATrackedFace *face, BOOL leftEye,
     }
     return apply_centered_sensitivity(value, neutral, sensitivity->eyeOpen,
                                       0.0f, 1.0f);
+}
+
+static float eye_narrowing_value(const AppleCVATrackedFace *face, BOOL leftEye,
+                                 const VTSAppleCVACalibration *calibration) {
+    if (face == NULL) {
+        return 0.0f;
+    }
+
+    float neutral = 1.0f;
+    if (calibration != NULL && calibration->valid) {
+        neutral = leftEye ? calibration->eyeOpenLeftNeutral
+                          : calibration->eyeOpenRightNeutral;
+        neutral = clampf(neutral, 0.05f, 1.0f);
+    }
+
+    const float measurement = eye_open_measurement(face, leftEye);
+    const float narrowing = clamp01(neutral - measurement);
+    const float scale = fmaxf(0.12f, neutral * 0.35f);
+    return remap_clamped(narrowing, 0.03f, scale, 0.0f, 1.0f);
 }
 
 static float mouth_open_value(const AppleCVATrackedFace *face) {
@@ -736,6 +766,23 @@ void VTSAppleCVACalibrationFromObservedSamples(
 }
 
 static float
+mouth_smile_side_value(const AppleCVATrackedFace *face, BOOL leftSide,
+                       const VTSAppleCVASensitivityParameters *sensitivity) {
+    if (face == NULL) {
+        return 0.0f;
+    }
+    const size_t smileIndex = leftSide ? VTSAppleCVABlendshapeMouthSmileLeft
+                                       : VTSAppleCVABlendshapeMouthSmileRight;
+    const size_t frownIndex = leftSide ? VTSAppleCVABlendshapeMouthFrownLeft
+                                       : VTSAppleCVABlendshapeMouthFrownRight;
+    const float smile = blendshape_at(face, smileIndex);
+    const float frown = blendshape_at(face, frownIndex);
+    return apply_zero_based_sensitivity(
+        smile - (frown * 0.35f),
+        sensitivity != NULL ? sensitivity->mouthSmile : kVTSSensitivityDefault);
+}
+
+static float
 mouth_smile_value(const AppleCVATrackedFace *face,
                   const VTSAppleCVASensitivityParameters *sensitivity) {
     if (face == NULL) {
@@ -754,17 +801,45 @@ mouth_smile_value(const AppleCVATrackedFace *face,
         sensitivity != NULL ? sensitivity->mouthSmile : kVTSSensitivityDefault);
 }
 
-static float eye_smile_value(const AppleCVATrackedFace *face, BOOL leftEye,
-                             float mouthSmile) {
+static float
+eye_smile_value(const AppleCVATrackedFace *face, BOOL leftEye,
+                const VTSAppleCVACalibration *calibration,
+                const VTSAppleCVASensitivityParameters *sensitivity) {
+    if (face == NULL) {
+        return 0.0f;
+    }
+
+    const size_t eyeSquintIndex = leftEye ? VTSAppleCVABlendshapeEyeSquintLeft
+                                          : VTSAppleCVABlendshapeEyeSquintRight;
     const size_t cheekSquintIndex = leftEye
                                         ? VTSAppleCVABlendshapeCheekSquintLeft
                                         : VTSAppleCVABlendshapeCheekSquintRight;
+    const size_t mouthFrownIndex = leftEye
+                                       ? VTSAppleCVABlendshapeMouthFrownLeft
+                                       : VTSAppleCVABlendshapeMouthFrownRight;
     const size_t browDownIndex = leftEye ? VTSAppleCVABlendshapeBrowDownLeft
                                          : VTSAppleCVABlendshapeBrowDownRight;
+    const size_t blinkIndex = leftEye ? VTSAppleCVABlendshapeEyeBlinkLeft
+                                      : VTSAppleCVABlendshapeEyeBlinkRight;
+    const float mouthSmile = mouth_smile_side_value(face, leftEye, sensitivity);
+    const float eyeSquint = blendshape_at(face, eyeSquintIndex);
     const float cheekSquint = blendshape_at(face, cheekSquintIndex);
+    const float mouthFrown = blendshape_at(face, mouthFrownIndex);
     const float browDown = blendshape_at(face, browDownIndex);
-    const float penalty = 1.0f - clamp01(browDown);
-    return clamp01(((mouthSmile * 0.8f) + (cheekSquint * 0.2f)) * penalty);
+    const float blink = blendshape_at(face, blinkIndex);
+    const float narrowing = eye_narrowing_value(face, leftEye, calibration);
+    const float smileGate = remap_clamped(mouthSmile, 0.08f, 0.62f, 0.0f, 1.0f);
+    const float eyeGate = remap_clamped(
+        (eyeSquint * 0.45f) + (cheekSquint * 0.35f) + (narrowing * 0.20f),
+        0.10f, 0.55f, 0.0f, 1.0f);
+    const float browPenalty =
+        1.0f - remap_clamped(browDown, 0.15f, 0.65f, 0.0f, 0.90f);
+    const float blinkPenalty =
+        1.0f - remap_clamped(blink, 0.55f, 0.92f, 0.0f, 1.0f);
+    const float frownPenalty =
+        1.0f - remap_clamped(mouthFrown, 0.08f, 0.45f, 0.0f, 0.85f);
+    return clamp01(smileGate * eyeGate * browPenalty * blinkPenalty *
+                   frownPenalty);
 }
 
 static float blush_when_smiling_value(float mouthSmile) {
@@ -988,8 +1063,10 @@ NSArray<NSDictionary *> *VTSAppleCVAParameterValues(
     const float mouthOpen =
         calibrated_mouth_open_value(face, calibration, &sensitivity);
     const float mouthSmile = mouth_smile_value(face, &sensitivity);
-    const float eyeSmileLeft = eye_smile_value(face, YES, mouthSmile);
-    const float eyeSmileRight = eye_smile_value(face, NO, mouthSmile);
+    const float eyeSmileLeft =
+        eye_smile_value(face, YES, calibration, &sensitivity);
+    const float eyeSmileRight =
+        eye_smile_value(face, NO, calibration, &sensitivity);
     const float blushWhenSmiling = blush_when_smiling_value(mouthSmile);
     const float mouthX = mouth_x_value(face);
     const float browLeftY = brow_y_value(face, YES, calibration, &sensitivity);
