@@ -966,21 +966,22 @@ void AppleCVATrackerDestroy(AppleCVATracker *tracker) {
 }
 
 static void init_raw_output_result(CFDictionaryRef *out_decoded_output,
-                                   bool *out_aux_flag) {
+                                   bool *out_secondary_processing_requested) {
     *out_decoded_output = NULL;
-    if (out_aux_flag != NULL) {
-        *out_aux_flag = false;
+    if (out_secondary_processing_requested != NULL) {
+        *out_secondary_processing_requested = false;
     }
 }
 
 static int32_t
 copy_raw_decoded_output_internal(AppleCVATracker *tracker,
                                  CFDictionaryRef *out_decoded_output,
-                                 bool *out_aux_flag) {
+                                 bool *out_secondary_processing_requested) {
     if (tracker == NULL || out_decoded_output == NULL) {
         return APPLECVA_ERR_INVALID_ARGUMENT;
     }
-    init_raw_output_result(out_decoded_output, out_aux_flag);
+    init_raw_output_result(out_decoded_output,
+                           out_secondary_processing_requested);
 
     const void *output = tracker->api.get_output(tracker->tracker);
     if (output == NULL) {
@@ -989,15 +990,16 @@ copy_raw_decoded_output_internal(AppleCVATracker *tracker,
     }
     trace_log("get_output => %p", output);
 
-    Boolean aux_flag = false;
+    Boolean secondary_processing_requested = false;
     CFDictionaryRef decoded_output = NULL;
-    const int32_t status =
-        tracker->api.copy_decoded_output(output, &decoded_output, &aux_flag);
-    if (out_aux_flag != NULL) {
-        *out_aux_flag = (aux_flag != false);
+    const int32_t status = tracker->api.copy_decoded_output(
+        output, &decoded_output, &secondary_processing_requested);
+    if (out_secondary_processing_requested != NULL) {
+        *out_secondary_processing_requested =
+            (secondary_processing_requested != false);
     }
-    trace_log("copy_decoded_output => %d aux=%d decoded=%p", status,
-              (int)(aux_flag != false), decoded_output);
+    trace_log("copy_decoded_output => %d secondary=%d decoded=%p", status,
+              (int)(secondary_processing_requested != false), decoded_output);
     if (status != 0 || decoded_output == NULL) {
         if (decoded_output != NULL) {
             CFRelease(decoded_output);
@@ -1010,8 +1012,8 @@ copy_raw_decoded_output_internal(AppleCVATracker *tracker,
 }
 
 static void process_lite_secondary_if_requested(AppleCVATracker *tracker,
-                                                bool aux_flag) {
-    if (!aux_flag) {
+                                                bool requested) {
+    if (!requested) {
         return;
     }
 
@@ -1088,16 +1090,18 @@ cleanup:
     return result;
 }
 
-int32_t AppleCVATrackerCopyRawDecodedOutput(AppleCVATracker *tracker,
-                                            CFDictionaryRef *out_decoded_output,
-                                            bool *out_aux_flag) {
+int32_t
+AppleCVATrackerCopyRawDecodedOutput(AppleCVATracker *tracker,
+                                    CFDictionaryRef *out_decoded_output,
+                                    bool *out_secondary_processing_requested) {
     if (tracker != NULL &&
         (tracker->config.backend_mode == APPLECVA_BACKEND_MODE_FULL ||
          tracker->last_output_backend_mode == APPLECVA_BACKEND_MODE_FULL)) {
         if (out_decoded_output == NULL) {
             return APPLECVA_ERR_INVALID_ARGUMENT;
         }
-        init_raw_output_result(out_decoded_output, out_aux_flag);
+        init_raw_output_result(out_decoded_output,
+                               out_secondary_processing_requested);
         if (tracker->full_last_output == NULL) {
             return APPLECVA_ERR_DECODE_FAILED;
         }
@@ -1106,7 +1110,7 @@ int32_t AppleCVATrackerCopyRawDecodedOutput(AppleCVATracker *tracker,
         return APPLECVA_OK;
     }
     return copy_raw_decoded_output_internal(tracker, out_decoded_output,
-                                            out_aux_flag);
+                                            out_secondary_processing_requested);
 }
 
 static void fill_frame_result_from_output(CFDictionaryRef decoded_output,
@@ -1313,7 +1317,7 @@ process_frame_full_api(AppleCVATracker *tracker, CVPixelBufferRef input_buffer,
     }
 
     tracker_take_full_last_output(tracker, callback_output);
-    out_result->aux_flag = false;
+    out_result->secondary_processing_requested = false;
     fill_frame_result_from_output(callback_output, out_result);
     trace_full_output(callback_output);
     tracker->last_output_backend_mode = APPLECVA_BACKEND_MODE_FULL;
@@ -1411,15 +1415,16 @@ process_frame_lite_api(AppleCVATracker *tracker, CVPixelBufferRef input_buffer,
     }
 
     CFDictionaryRef decoded_output = NULL;
-    status = copy_raw_decoded_output_internal(tracker, &decoded_output,
-                                              &out_result->aux_flag);
+    status = copy_raw_decoded_output_internal(
+        tracker, &decoded_output, &out_result->secondary_processing_requested);
     if (status != APPLECVA_OK) {
         return status;
     }
 
     fill_frame_result_from_output(decoded_output, out_result);
 
-    const bool should_process_secondary = out_result->aux_flag;
+    const bool should_process_secondary =
+        out_result->secondary_processing_requested;
     CFRelease(decoded_output);
     tracker->last_output_backend_mode = APPLECVA_BACKEND_MODE_LITE;
     process_lite_secondary_if_requested(tracker, should_process_secondary);
@@ -1436,8 +1441,7 @@ process_frame_auto_api(AppleCVATracker *tracker, CVPixelBufferRef input_buffer,
         trace_log("auto backend full unavailable; using lite output");
         return process_frame_lite_api(tracker, input_buffer, camera_parameters,
                                       detected_faces, detected_face_count,
-                                      timestamp_seconds, lux_level,
-                                      out_result);
+                                      timestamp_seconds, lux_level, out_result);
     }
 
     const int32_t full_status = process_frame_full_api(

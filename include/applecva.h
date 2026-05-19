@@ -170,7 +170,7 @@ typedef struct {
     size_t tracked_face_count;
     size_t tracked_faces_written;
     bool tracked_faces_truncated;
-    bool aux_flag;
+    bool secondary_processing_requested;
     double timestamp_seconds;
 } AppleCVAFrameResult;
 
@@ -231,9 +231,10 @@ void AppleCVATrackerDestroy(AppleCVATracker* tracker);
  *
  * The caller owns `*out_decoded_output` and must release it with CFRelease.
  */
-int32_t AppleCVATrackerCopyRawDecodedOutput(AppleCVATracker* tracker,
-                                            CFDictionaryRef* out_decoded_output,
-                                            bool* out_aux_flag);
+int32_t
+AppleCVATrackerCopyRawDecodedOutput(AppleCVATracker* tracker,
+                                    CFDictionaryRef* out_decoded_output,
+                                    bool* out_secondary_processing_requested);
 
 /**
  * Process one frame through AppleCVA.
