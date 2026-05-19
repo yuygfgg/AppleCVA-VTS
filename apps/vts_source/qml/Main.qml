@@ -278,6 +278,97 @@ ApplicationWindow {
                     }
 
                     Card {
+                        title: "Tracking Sensitivity"
+
+                        Label {
+                            text: "Blink: " + controller.blinkSensitivity.toFixed(0)
+                            color: "#5c5c5c"
+                        }
+
+                        VTSSlider {
+                            from: 0
+                            to: 100
+                            stepSize: 1
+                            snapMode: Slider.SnapAlways
+                            value: controller.blinkSensitivity
+                            Layout.fillWidth: true
+                            onMoved: controller.blinkSensitivity = Math.round(value)
+                        }
+
+                        Label {
+                            text: "Eye open: " + controller.eyeOpenSensitivity.toFixed(0)
+                            color: "#5c5c5c"
+                            Layout.topMargin: 4
+                        }
+
+                        VTSSlider {
+                            from: 0
+                            to: 100
+                            stepSize: 1
+                            snapMode: Slider.SnapAlways
+                            value: controller.eyeOpenSensitivity
+                            Layout.fillWidth: true
+                            onMoved: controller.eyeOpenSensitivity = Math.round(value)
+                        }
+
+                        Label {
+                            text: "Mouth open: " + controller.mouthOpenSensitivity.toFixed(0)
+                            color: "#5c5c5c"
+                            Layout.topMargin: 4
+                        }
+
+                        VTSSlider {
+                            from: 0
+                            to: 100
+                            stepSize: 1
+                            snapMode: Slider.SnapAlways
+                            value: controller.mouthOpenSensitivity
+                            Layout.fillWidth: true
+                            onMoved: controller.mouthOpenSensitivity = Math.round(value)
+                        }
+
+                        Label {
+                            text: "Mouth smile: " + controller.mouthSmileSensitivity.toFixed(0)
+                            color: "#5c5c5c"
+                            Layout.topMargin: 4
+                        }
+
+                        VTSSlider {
+                            from: 0
+                            to: 100
+                            stepSize: 1
+                            snapMode: Slider.SnapAlways
+                            value: controller.mouthSmileSensitivity
+                            Layout.fillWidth: true
+                            onMoved: controller.mouthSmileSensitivity = Math.round(value)
+                        }
+
+                        Label {
+                            text: "Brow: " + controller.browSensitivity.toFixed(0)
+                            color: "#5c5c5c"
+                            Layout.topMargin: 4
+                        }
+
+                        VTSSlider {
+                            from: 0
+                            to: 100
+                            stepSize: 1
+                            snapMode: Slider.SnapAlways
+                            value: controller.browSensitivity
+                            Layout.fillWidth: true
+                            onMoved: controller.browSensitivity = Math.round(value)
+                        }
+
+                        VTSButton {
+                            text: "Reset Sensitivity"
+                            Layout.fillWidth: true
+                            Layout.topMargin: 4
+                            onClicked: controller.resetSensitivityParameters()
+                        }
+
+                    }
+
+                    Card {
                         id: oneEuroFilterCard
 
                         readonly property color parameterLabelColor: controller.enableFilter ? "#5c5c5c" : "#a8a8a8"

@@ -4,6 +4,15 @@
 #include <string.h>
 
 static const size_t kVTSMaxCustomParameters = 100;
+static const float kVTSSensitivityDefault = 50.0f;
+
+// Currently not default parameter, but a lot of models use it.
+// Will be default parameter in the future?
+static const char *const kSpecialVTSParameterNames[] = {
+    "EyeSmileLeft",
+    "EyeSmileRight",
+    "BlushWhenSmiling",
+};
 
 static const char *const kCustomBlendshapeNames[APPLECVA_MAX_BLENDSHAPES] = {
     "ACVAEyeBlinkLeft",       "ACVAEyeBlinkRight",
@@ -100,9 +109,18 @@ acva_blendshape_parameter_count(BOOL includeARKitAliases,
         return 0;
     }
     const size_t derivedACVAParameterCount = 17;
+    size_t specialCustomCount = 0;
+    for (size_t i = 0; i < ARRAY_COUNT(kSpecialVTSParameterNames); ++i) {
+        NSString *name =
+            [NSString stringWithUTF8String:kSpecialVTSParameterNames[i]];
+        if (!parameter_name_is_default(name, availableDefaults)) {
+            ++specialCustomCount;
+        }
+    }
     const size_t aliasCustomCount = arkit_alias_custom_parameter_count(
         includeARKitAliases, availableDefaults);
-    const size_t reserved = derivedACVAParameterCount + aliasCustomCount;
+    const size_t reserved =
+        derivedACVAParameterCount + specialCustomCount + aliasCustomCount;
     if (reserved >= kVTSMaxCustomParameters) {
         return 0;
     }
@@ -151,6 +169,8 @@ typedef enum {
     VTSAppleCVABlendshapeMouthLeft = 42,
     VTSAppleCVABlendshapeMouthRight = 43,
     VTSAppleCVABlendshapeCheekPuff = 48,
+    VTSAppleCVABlendshapeCheekSquintLeft = 49,
+    VTSAppleCVABlendshapeCheekSquintRight = 50,
 } VTSAppleCVABlendshapeIndex;
 
 typedef enum {
@@ -184,6 +204,46 @@ static float clampf(float value, float minimum, float maximum) {
 }
 
 static float clamp01(float value) { return clampf(value, 0.0f, 1.0f); }
+
+static float clamp_sensitivity(float value) {
+    if (!isfinite(value)) {
+        return kVTSSensitivityDefault;
+    }
+    return clampf(value, 0.0f, 100.0f);
+}
+
+static float sensitivity_gain(float sensitivity) {
+    return clamp_sensitivity(sensitivity) / kVTSSensitivityDefault;
+}
+
+VTSAppleCVASensitivityParameters VTSAppleCVASensitivityParametersDefault(void) {
+    VTSAppleCVASensitivityParameters parameters = {
+        kVTSSensitivityDefault, kVTSSensitivityDefault, kVTSSensitivityDefault,
+        kVTSSensitivityDefault, kVTSSensitivityDefault,
+    };
+    return parameters;
+}
+
+VTSAppleCVASensitivityParameters VTSAppleCVASensitivityParametersSanitize(
+    VTSAppleCVASensitivityParameters parameters) {
+    parameters.blink = clamp_sensitivity(parameters.blink);
+    parameters.eyeOpen = clamp_sensitivity(parameters.eyeOpen);
+    parameters.mouthOpen = clamp_sensitivity(parameters.mouthOpen);
+    parameters.mouthSmile = clamp_sensitivity(parameters.mouthSmile);
+    parameters.brow = clamp_sensitivity(parameters.brow);
+    return parameters;
+}
+
+static float apply_zero_based_sensitivity(float value, float sensitivity) {
+    return clamp01(value * sensitivity_gain(sensitivity));
+}
+
+static float apply_centered_sensitivity(float value, float center,
+                                        float sensitivity, float minimum,
+                                        float maximum) {
+    return clampf(center + ((value - center) * sensitivity_gain(sensitivity)),
+                  minimum, maximum);
+}
 
 static float remap_clamped(float value, float inputMinimum, float inputMaximum,
                            float outputMinimum, float outputMaximum) {
@@ -438,6 +498,37 @@ static float blendshape_at(const AppleCVATrackedFace *face, size_t index) {
     return clamp01(face->blendshapes[index]);
 }
 
+static float
+adjusted_blendshape_value(const AppleCVATrackedFace *face,
+                          size_t blendshapeIndex,
+                          const VTSAppleCVASensitivityParameters *sensitivity) {
+    const float value = blendshape_at(face, blendshapeIndex);
+    if (sensitivity == NULL) {
+        return value;
+    }
+    switch (blendshapeIndex) {
+    case VTSAppleCVABlendshapeEyeBlinkLeft:
+    case VTSAppleCVABlendshapeEyeBlinkRight:
+        return apply_zero_based_sensitivity(value, sensitivity->blink);
+    case VTSAppleCVABlendshapeEyeWideLeft:
+    case VTSAppleCVABlendshapeEyeWideRight:
+        return apply_zero_based_sensitivity(value, sensitivity->eyeOpen);
+    case VTSAppleCVABlendshapeBrowDownLeft:
+    case VTSAppleCVABlendshapeBrowDownRight:
+    case VTSAppleCVABlendshapeBrowInnerUp:
+    case VTSAppleCVABlendshapeBrowOuterUpLeft:
+    case VTSAppleCVABlendshapeBrowOuterUpRight:
+        return apply_zero_based_sensitivity(value, sensitivity->brow);
+    case VTSAppleCVABlendshapeJawOpen:
+        return apply_zero_based_sensitivity(value, sensitivity->mouthOpen);
+    case VTSAppleCVABlendshapeMouthSmileLeft:
+    case VTSAppleCVABlendshapeMouthSmileRight:
+        return apply_zero_based_sensitivity(value, sensitivity->mouthSmile);
+    default:
+        return value;
+    }
+}
+
 static float eye_open_from_landmarks(const AppleCVATrackedFace *face,
                                      BOOL leftEye) {
     const size_t outerIndex = leftEye ? VTSAppleCVALandmarkLeftEyeOuterCorner
@@ -482,7 +573,10 @@ static float eye_open_from_landmarks(const AppleCVATrackedFace *face,
     return remap_clamped(ratio, 0.03f, 0.19f, 0.0f, 1.0f);
 }
 
-static float eye_open_value(const AppleCVATrackedFace *face, BOOL leftEye) {
+static float
+eye_open_value(const AppleCVATrackedFace *face, BOOL leftEye,
+               const VTSAppleCVACalibration *calibration,
+               const VTSAppleCVASensitivityParameters *sensitivity) {
     if (face == NULL) {
         return 1.0f;
     }
@@ -499,7 +593,23 @@ static float eye_open_value(const AppleCVATrackedFace *face, BOOL leftEye) {
     if (blinkClosed < 0.2f) {
         value += blendshape_at(face, wideIndex) * 0.15f;
     }
-    return clamp01(value);
+    value = clamp01(value);
+    if (sensitivity == NULL) {
+        return value;
+    }
+
+    float neutral = 1.0f;
+    if (calibration != NULL && calibration->valid) {
+        neutral = leftEye ? calibration->eyeOpenLeftNeutral
+                          : calibration->eyeOpenRightNeutral;
+        neutral = clampf(neutral, 0.05f, 1.0f);
+    }
+    if (value < neutral) {
+        return apply_centered_sensitivity(value, neutral, sensitivity->blink,
+                                          0.0f, 1.0f);
+    }
+    return apply_centered_sensitivity(value, neutral, sensitivity->eyeOpen,
+                                      0.0f, 1.0f);
 }
 
 static float mouth_open_value(const AppleCVATrackedFace *face) {
@@ -509,9 +619,9 @@ static float mouth_open_value(const AppleCVATrackedFace *face) {
     return blendshape_at(face, VTSAppleCVABlendshapeJawOpen);
 }
 
-static float
-calibrated_mouth_open_value(const AppleCVATrackedFace *face,
-                            const VTSAppleCVACalibration *calibration) {
+static float calibrated_mouth_open_value(
+    const AppleCVATrackedFace *face, const VTSAppleCVACalibration *calibration,
+    const VTSAppleCVASensitivityParameters *sensitivity) {
     if (face == NULL) {
         return 0.0f;
     }
@@ -529,10 +639,14 @@ calibrated_mouth_open_value(const AppleCVATrackedFace *face,
     if (mouthClose > 0.2f) {
         mouthOpen *= 1.0f - remap_clamped(mouthClose, 0.2f, 0.8f, 0.0f, 1.0f);
     }
-    return clamp01(mouthOpen);
+    return apply_zero_based_sensitivity(
+        mouthOpen,
+        sensitivity != NULL ? sensitivity->mouthOpen : kVTSSensitivityDefault);
 }
 
-static float brow_y_value(const AppleCVATrackedFace *face, BOOL leftBrow);
+static float brow_y_value(const AppleCVATrackedFace *face, BOOL leftBrow,
+                          const VTSAppleCVACalibration *calibration,
+                          const VTSAppleCVASensitivityParameters *sensitivity);
 
 void VTSAppleCVACalibrationInit(VTSAppleCVACalibration *calibration) {
     if (calibration != NULL) {
@@ -564,10 +678,10 @@ BOOL VTSAppleCVAObservedValuesFromFace(const AppleCVATrackedFace *face,
                      &outValues->facePositionZ);
     outValues->jawOpen = blendshape_at(face, VTSAppleCVABlendshapeJawOpen);
     outValues->mouthOpen = mouth_open_value(face);
-    outValues->eyeOpenLeft = eye_open_value(face, YES);
-    outValues->eyeOpenRight = eye_open_value(face, NO);
-    outValues->browLeftY = brow_y_value(face, YES);
-    outValues->browRightY = brow_y_value(face, NO);
+    outValues->eyeOpenLeft = eye_open_value(face, YES, NULL, NULL);
+    outValues->eyeOpenRight = eye_open_value(face, NO, NULL, NULL);
+    outValues->browLeftY = brow_y_value(face, YES, NULL, NULL);
+    outValues->browRightY = brow_y_value(face, NO, NULL, NULL);
     return YES;
 }
 
@@ -621,7 +735,9 @@ void VTSAppleCVACalibrationFromObservedSamples(
     outCalibration->browRightYNeutral = sum.browRightYNeutral * scale;
 }
 
-static float mouth_smile_value(const AppleCVATrackedFace *face) {
+static float
+mouth_smile_value(const AppleCVATrackedFace *face,
+                  const VTSAppleCVASensitivityParameters *sensitivity) {
     if (face == NULL) {
         return 0.0f;
     }
@@ -633,7 +749,26 @@ static float mouth_smile_value(const AppleCVATrackedFace *face) {
         (blendshape_at(face, VTSAppleCVABlendshapeMouthFrownLeft) +
          blendshape_at(face, VTSAppleCVABlendshapeMouthFrownRight)) *
         0.5f;
-    return clamp01(smile - (frown * 0.35f));
+    return apply_zero_based_sensitivity(
+        smile - (frown * 0.35f),
+        sensitivity != NULL ? sensitivity->mouthSmile : kVTSSensitivityDefault);
+}
+
+static float eye_smile_value(const AppleCVATrackedFace *face, BOOL leftEye,
+                             float mouthSmile) {
+    const size_t cheekSquintIndex = leftEye
+                                        ? VTSAppleCVABlendshapeCheekSquintLeft
+                                        : VTSAppleCVABlendshapeCheekSquintRight;
+    const size_t browDownIndex = leftEye ? VTSAppleCVABlendshapeBrowDownLeft
+                                         : VTSAppleCVABlendshapeBrowDownRight;
+    const float cheekSquint = blendshape_at(face, cheekSquintIndex);
+    const float browDown = blendshape_at(face, browDownIndex);
+    const float penalty = 1.0f - clamp01(browDown);
+    return clamp01(((mouthSmile * 0.8f) + (cheekSquint * 0.2f)) * penalty);
+}
+
+static float blush_when_smiling_value(float mouthSmile) {
+    return clamp01(mouthSmile);
 }
 
 static float mouth_x_value(const AppleCVATrackedFace *face) {
@@ -645,7 +780,9 @@ static float mouth_x_value(const AppleCVATrackedFace *face) {
                   -1.0f, 1.0f);
 }
 
-static float brow_y_value(const AppleCVATrackedFace *face, BOOL leftBrow) {
+static float brow_y_value(const AppleCVATrackedFace *face, BOOL leftBrow,
+                          const VTSAppleCVACalibration *calibration,
+                          const VTSAppleCVASensitivityParameters *sensitivity) {
     if (face == NULL) {
         return 0.5f;
     }
@@ -656,7 +793,18 @@ static float brow_y_value(const AppleCVATrackedFace *face, BOOL leftBrow) {
         blendshape_at(face, leftBrow ? VTSAppleCVABlendshapeBrowOuterUpLeft
                                      : VTSAppleCVABlendshapeBrowOuterUpRight);
     const float innerUp = blendshape_at(face, VTSAppleCVABlendshapeBrowInnerUp);
-    return clamp01(0.5f + (((outerUp + innerUp) * 0.5f - browDown) * 0.5f));
+    const float value =
+        clamp01(0.5f + (((outerUp + innerUp) * 0.5f - browDown) * 0.5f));
+    float neutral = 0.5f;
+    if (calibration != NULL && calibration->valid) {
+        neutral = leftBrow ? calibration->browLeftYNeutral
+                           : calibration->browRightYNeutral;
+        neutral = clamp01(neutral);
+    }
+    return apply_centered_sensitivity(
+        value, neutral,
+        sensitivity != NULL ? sensitivity->brow : kVTSSensitivityDefault, 0.0f,
+        1.0f);
 }
 
 static float eye_degrees_to_vts(float radians) {
@@ -742,6 +890,24 @@ VTSAppleCVACustomParameterDefinitions(BOOL includeARKitAliases,
     [definitions addObject:parameter_definition(@"ACVABrowRightY",
                                                 @"AppleCVA right brow height",
                                                 0.0f, 1.0f, 0.5f)];
+    if (!parameter_name_is_default(@"EyeSmileLeft", availableDefaults)) {
+        [definitions
+            addObject:parameter_definition(@"EyeSmileLeft",
+                                           @"AppleCVA derived left eye smile",
+                                           0.0f, 1.0f, 0.0f)];
+    }
+    if (!parameter_name_is_default(@"EyeSmileRight", availableDefaults)) {
+        [definitions
+            addObject:parameter_definition(@"EyeSmileRight",
+                                           @"AppleCVA derived right eye smile",
+                                           0.0f, 1.0f, 0.0f)];
+    }
+    if (!parameter_name_is_default(@"BlushWhenSmiling", availableDefaults)) {
+        [definitions addObject:parameter_definition(
+                                   @"BlushWhenSmiling",
+                                   @"AppleCVA smile-driven blush amount", 0.0f,
+                                   1.0f, 0.0f)];
+    }
     if (includeARKitAliases) {
         for (size_t i = 0; i < ARRAY_COUNT(kARKitAliasParameters); ++i) {
             const VTSAppleCVAIndexedParameterName alias =
@@ -779,10 +945,19 @@ VTSAppleCVACustomParameterDefinitions(BOOL includeARKitAliases,
 NSArray<NSDictionary *> *VTSAppleCVAParameterValues(
     const AppleCVATrackedFace *face, BOOL faceFound,
     NSSet<NSString *> *availableDefaultParameters,
-    const VTSAppleCVACalibration *calibration, BOOL includeCustomParameters,
-    BOOL includeARKitAliases, BOOL includeACVABlendshapeParameters) {
+    const VTSAppleCVACalibration *calibration,
+    const VTSAppleCVASensitivityParameters *sensitivityParameters,
+    BOOL includeCustomParameters, BOOL includeARKitAliases,
+    BOOL includeACVABlendshapeParameters) {
     if (!faceFound) {
         face = NULL;
+    }
+
+    VTSAppleCVASensitivityParameters sensitivity =
+        VTSAppleCVASensitivityParametersDefault();
+    if (sensitivityParameters != NULL) {
+        sensitivity =
+            VTSAppleCVASensitivityParametersSanitize(*sensitivityParameters);
     }
 
     NSMutableArray *values =
@@ -806,13 +981,19 @@ NSArray<NSDictionary *> *VTSAppleCVAParameterValues(
     float facePositionZ = 0.0f;
     calibrated_face_position_values(face, calibration, &facePositionX,
                                     &facePositionY, &facePositionZ);
-    const float eyeOpenLeft = eye_open_value(face, YES);
-    const float eyeOpenRight = eye_open_value(face, NO);
-    const float mouthOpen = calibrated_mouth_open_value(face, calibration);
-    const float mouthSmile = mouth_smile_value(face);
+    const float eyeOpenLeft =
+        eye_open_value(face, YES, calibration, &sensitivity);
+    const float eyeOpenRight =
+        eye_open_value(face, NO, calibration, &sensitivity);
+    const float mouthOpen =
+        calibrated_mouth_open_value(face, calibration, &sensitivity);
+    const float mouthSmile = mouth_smile_value(face, &sensitivity);
+    const float eyeSmileLeft = eye_smile_value(face, YES, mouthSmile);
+    const float eyeSmileRight = eye_smile_value(face, NO, mouthSmile);
+    const float blushWhenSmiling = blush_when_smiling_value(mouthSmile);
     const float mouthX = mouth_x_value(face);
-    const float browLeftY = brow_y_value(face, YES);
-    const float browRightY = brow_y_value(face, NO);
+    const float browLeftY = brow_y_value(face, YES, calibration, &sensitivity);
+    const float browRightY = brow_y_value(face, NO, calibration, &sensitivity);
     const float eyeLeftX =
         face != NULL ? eye_degrees_to_vts(face->left_eye_yaw) : 0.0f;
     const float eyeLeftY =
@@ -851,6 +1032,12 @@ NSArray<NSDictionary *> *VTSAppleCVAParameterValues(
                               mouthOpen);
         add_default_parameter(values, availableDefaultParameters, @"MouthSmile",
                               mouthSmile);
+        add_default_parameter(values, availableDefaultParameters,
+                              @"EyeSmileLeft", eyeSmileLeft);
+        add_default_parameter(values, availableDefaultParameters,
+                              @"EyeSmileRight", eyeSmileRight);
+        add_default_parameter(values, availableDefaultParameters,
+                              @"BlushWhenSmiling", blushWhenSmiling);
         add_default_parameter(values, availableDefaultParameters, @"MouthX",
                               mouthX);
         add_default_parameter(values, availableDefaultParameters, @"Brows",
@@ -872,14 +1059,29 @@ NSArray<NSDictionary *> *VTSAppleCVAParameterValues(
         return values;
     }
 
+    if (!parameter_name_is_default(@"EyeSmileLeft",
+                                   availableDefaultParameters)) {
+        [values addObject:parameter_value(@"EyeSmileLeft", eyeSmileLeft)];
+    }
+    if (!parameter_name_is_default(@"EyeSmileRight",
+                                   availableDefaultParameters)) {
+        [values addObject:parameter_value(@"EyeSmileRight", eyeSmileRight)];
+    }
+    if (!parameter_name_is_default(@"BlushWhenSmiling",
+                                   availableDefaultParameters)) {
+        [values
+            addObject:parameter_value(@"BlushWhenSmiling", blushWhenSmiling)];
+    }
+
     if (includeARKitAliases) {
         for (size_t i = 0; i < ARRAY_COUNT(kARKitAliasParameters); ++i) {
             const VTSAppleCVAIndexedParameterName alias =
                 kARKitAliasParameters[i];
             NSString *name = [NSString stringWithUTF8String:alias.name];
-            [values addObject:parameter_value(
-                                  name,
-                                  blendshape_at(face, alias.blendshapeIndex))];
+            [values
+                addObject:parameter_value(name, adjusted_blendshape_value(
+                                                    face, alias.blendshapeIndex,
+                                                    &sensitivity))];
         }
     }
 

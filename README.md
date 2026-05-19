@@ -7,6 +7,7 @@ macOS VTube Studio tracking source based on AppleCVA face tracking.
 Calibration is required before the app connects to VTube Studio or injects tracking parameters. Start the app, keep a neutral expression, look straight at the camera, and press `Calibrate First` button or `c` key.
 
 The app injects available default VTS tracking parameters and, by default, creates full ARKit-style aliases plus a small set of derived `ACVA...` custom parameters.
+It also emits `EyeSmileLeft`, `EyeSmileRight`, and `BlushWhenSmiling`, using VTS defaults when available and custom parameters otherwise.
 
 ### GUI Settings
 
@@ -19,9 +20,14 @@ All runtime settings are configured in the right-side panel and are saved for th
 | Include ARKit aliases          | Create ARKit-style custom aliases when VTS does not expose matching defaults.                                                                                                                                                             |
 | Fill raw ACVA blendshapes      | Use remaining VTS custom slots for raw `ACVA...` blendshape channels.                                                                                                                                                                     |
 | Backend                        | Switch between auto, full, and lite AppleCVA backend modes. Auto is the default: it uses full when full tracks a face and uses lite only when full returns zero tracked faces. Changing backend restarts tracking and clears calibration. |
+| Tracking sensitivity           | Adjust blink, eye-open, mouth-open, mouth-smile, and brow sensitivity on a `0` to `100` scale. The default is `50`.                                                                                                                       |
 | Use One Euro filter            | Toggle smoothing for preview and emitted VTS data.                                                                                                                                                                                        |
 | Min cutoff / Beta / Derivative | Tune the One Euro filter parameters live.                                                                                                                                                                                                 |
 | Preview toggles                | Mirror preview, camera visibility, landmark Y flip, and source-origin handling.                                                                                                                                                           |
+
+### Tracking Sensitivity
+
+Sensitivity is applied after neutral calibration and before values are sent to VTube Studio. `50` keeps the raw calibrated tracker output unchanged, lower values dampen that motion, and higher values amplify it.
 
 ### One Euro Tuning
 

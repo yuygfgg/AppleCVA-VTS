@@ -29,6 +29,8 @@ static const double kOneEuroBetaMinimum = 0.0;
 static const double kOneEuroBetaMaximum = 0.05;
 static const double kOneEuroDerivativeCutoffMinimum = 0.01;
 static const double kOneEuroDerivativeCutoffMaximum = 10.0;
+static const double kSensitivityMinimum = 0.0;
+static const double kSensitivityMaximum = 100.0;
 
 class RetainedPixelBuffer {
   public:
@@ -98,6 +100,16 @@ static NSString *const kDefaultsOneEuroMinCutoffKey =
 static NSString *const kDefaultsOneEuroBetaKey = @"vts_source.one_euro.beta";
 static NSString *const kDefaultsOneEuroDerivativeCutoffKey =
     @"vts_source.one_euro.derivative_cutoff";
+static NSString *const kDefaultsBlinkSensitivityKey =
+    @"vts_source.sensitivity.blink";
+static NSString *const kDefaultsEyeOpenSensitivityKey =
+    @"vts_source.sensitivity.eye_open";
+static NSString *const kDefaultsMouthOpenSensitivityKey =
+    @"vts_source.sensitivity.mouth_open";
+static NSString *const kDefaultsMouthSmileSensitivityKey =
+    @"vts_source.sensitivity.mouth_smile";
+static NSString *const kDefaultsBrowSensitivityKey =
+    @"vts_source.sensitivity.brow";
 
 struct VTSController::Impl {
     mutable std::mutex settingsMutex;
@@ -117,6 +129,8 @@ struct VTSController::Impl {
     QString selectedCameraUniqueID;
     AppleCVAOneEuroParameters oneEuroParameters =
         AppleCVAOneEuroParametersDefault();
+    VTSAppleCVASensitivityParameters sensitivityParameters =
+        VTSAppleCVASensitivityParametersDefault();
 
     QStringList cameraNames;
     int cameraIndex = 0;
@@ -156,6 +170,8 @@ struct SettingsSnapshot {
     QString selectedCameraUniqueID;
     AppleCVAOneEuroParameters oneEuroParameters =
         AppleCVAOneEuroParametersDefault();
+    VTSAppleCVASensitivityParameters sensitivityParameters =
+        VTSAppleCVASensitivityParametersDefault();
 };
 
 static QString qStringFromNSString(NSString *string) {
@@ -222,6 +238,7 @@ static SettingsSnapshot snapshotSettings(const VTSController::Impl *impl) {
     snapshot.topLeftOrigin = impl->topLeftOrigin;
     snapshot.selectedCameraUniqueID = impl->selectedCameraUniqueID;
     snapshot.oneEuroParameters = impl->oneEuroParameters;
+    snapshot.sensitivityParameters = impl->sensitivityParameters;
     return snapshot;
 }
 
@@ -629,6 +646,67 @@ void VTSController::setOneEuroDerivativeCutoff(double value) {
                            settings.oneEuroParameters.beta, value);
 }
 
+double VTSController::blinkSensitivity() const {
+    return snapshotSettings(d.get()).sensitivityParameters.blink;
+}
+
+void VTSController::setBlinkSensitivity(double value) {
+    SettingsSnapshot settings = snapshotSettings(d.get());
+    applySensitivityParameters(value, settings.sensitivityParameters.eyeOpen,
+                               settings.sensitivityParameters.mouthOpen,
+                               settings.sensitivityParameters.mouthSmile,
+                               settings.sensitivityParameters.brow);
+}
+
+double VTSController::eyeOpenSensitivity() const {
+    return snapshotSettings(d.get()).sensitivityParameters.eyeOpen;
+}
+
+void VTSController::setEyeOpenSensitivity(double value) {
+    SettingsSnapshot settings = snapshotSettings(d.get());
+    applySensitivityParameters(settings.sensitivityParameters.blink, value,
+                               settings.sensitivityParameters.mouthOpen,
+                               settings.sensitivityParameters.mouthSmile,
+                               settings.sensitivityParameters.brow);
+}
+
+double VTSController::mouthOpenSensitivity() const {
+    return snapshotSettings(d.get()).sensitivityParameters.mouthOpen;
+}
+
+void VTSController::setMouthOpenSensitivity(double value) {
+    SettingsSnapshot settings = snapshotSettings(d.get());
+    applySensitivityParameters(settings.sensitivityParameters.blink,
+                               settings.sensitivityParameters.eyeOpen, value,
+                               settings.sensitivityParameters.mouthSmile,
+                               settings.sensitivityParameters.brow);
+}
+
+double VTSController::mouthSmileSensitivity() const {
+    return snapshotSettings(d.get()).sensitivityParameters.mouthSmile;
+}
+
+void VTSController::setMouthSmileSensitivity(double value) {
+    SettingsSnapshot settings = snapshotSettings(d.get());
+    applySensitivityParameters(settings.sensitivityParameters.blink,
+                               settings.sensitivityParameters.eyeOpen,
+                               settings.sensitivityParameters.mouthOpen, value,
+                               settings.sensitivityParameters.brow);
+}
+
+double VTSController::browSensitivity() const {
+    return snapshotSettings(d.get()).sensitivityParameters.brow;
+}
+
+void VTSController::setBrowSensitivity(double value) {
+    SettingsSnapshot settings = snapshotSettings(d.get());
+    applySensitivityParameters(settings.sensitivityParameters.blink,
+                               settings.sensitivityParameters.eyeOpen,
+                               settings.sensitivityParameters.mouthOpen,
+                               settings.sensitivityParameters.mouthSmile,
+                               value);
+}
+
 QString VTSController::message() const { return d->message; }
 
 QString VTSController::extraStatusLine() const { return d->extraStatusLine; }
@@ -759,6 +837,14 @@ void VTSController::resetOneEuroParameters() {
                            defaults.derivative_cutoff);
 }
 
+void VTSController::resetSensitivityParameters() {
+    const VTSAppleCVASensitivityParameters defaults =
+        VTSAppleCVASensitivityParametersDefault();
+    applySensitivityParameters(defaults.blink, defaults.eyeOpen,
+                               defaults.mouthOpen, defaults.mouthSmile,
+                               defaults.brow);
+}
+
 void VTSController::loadSettings() {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     NSString *host = [defaults stringForKey:kDefaultsHostKey];
@@ -801,6 +887,23 @@ void VTSController::loadSettings() {
     settings.oneEuroParameters =
         AppleCVAOneEuroParametersSanitize(settings.oneEuroParameters);
 
+    settings.sensitivityParameters = VTSAppleCVASensitivityParametersDefault();
+    settings.sensitivityParameters.blink = static_cast<float>(default_double(
+        kDefaultsBlinkSensitivityKey, settings.sensitivityParameters.blink));
+    settings.sensitivityParameters.eyeOpen = static_cast<float>(
+        default_double(kDefaultsEyeOpenSensitivityKey,
+                       settings.sensitivityParameters.eyeOpen));
+    settings.sensitivityParameters.mouthOpen = static_cast<float>(
+        default_double(kDefaultsMouthOpenSensitivityKey,
+                       settings.sensitivityParameters.mouthOpen));
+    settings.sensitivityParameters.mouthSmile = static_cast<float>(
+        default_double(kDefaultsMouthSmileSensitivityKey,
+                       settings.sensitivityParameters.mouthSmile));
+    settings.sensitivityParameters.brow = static_cast<float>(default_double(
+        kDefaultsBrowSensitivityKey, settings.sensitivityParameters.brow));
+    settings.sensitivityParameters = VTSAppleCVASensitivityParametersSanitize(
+        settings.sensitivityParameters);
+
     {
         std::lock_guard<std::mutex> lock(d->settingsMutex);
         d->host = settings.host;
@@ -817,6 +920,7 @@ void VTSController::loadSettings() {
         d->topLeftOrigin = settings.topLeftOrigin;
         d->selectedCameraUniqueID = settings.selectedCameraUniqueID;
         d->oneEuroParameters = settings.oneEuroParameters;
+        d->sensitivityParameters = settings.sensitivityParameters;
     }
 }
 
@@ -851,6 +955,16 @@ void VTSController::saveSettings() {
                  forKey:kDefaultsOneEuroBetaKey];
     [defaults setDouble:settings.oneEuroParameters.derivative_cutoff
                  forKey:kDefaultsOneEuroDerivativeCutoffKey];
+    [defaults setDouble:settings.sensitivityParameters.blink
+                 forKey:kDefaultsBlinkSensitivityKey];
+    [defaults setDouble:settings.sensitivityParameters.eyeOpen
+                 forKey:kDefaultsEyeOpenSensitivityKey];
+    [defaults setDouble:settings.sensitivityParameters.mouthOpen
+                 forKey:kDefaultsMouthOpenSensitivityKey];
+    [defaults setDouble:settings.sensitivityParameters.mouthSmile
+                 forKey:kDefaultsMouthSmileSensitivityKey];
+    [defaults setDouble:settings.sensitivityParameters.brow
+                 forKey:kDefaultsBrowSensitivityKey];
 }
 
 void VTSController::installCameraObservers() {
@@ -998,6 +1112,7 @@ void VTSController::restartTrackingPipeline(bool resetCalibration) {
               [client defaultParameterNamesSnapshot];
           parameterValues = VTSAppleCVAParameterValues(
               face, hasFace, defaultParameterNames, &calibrationSnapshot,
+              &frameSettings.sensitivityParameters,
               frameSettings.includeCustomParameters,
               frameSettings.includeARKitAliases,
               frameSettings.includeACVABlendshapeParameters);
@@ -1084,6 +1199,34 @@ void VTSController::applyOneEuroParameters(double minCutoff, double beta,
     }
     saveSettings();
     emit oneEuroParametersChanged();
+}
+
+void VTSController::applySensitivityParameters(double blink, double eyeOpen,
+                                               double mouthOpen,
+                                               double mouthSmile, double brow) {
+    VTSAppleCVASensitivityParameters parameters;
+    parameters.blink = static_cast<float>(
+        clamp_double(blink, kSensitivityMinimum, kSensitivityMaximum));
+    parameters.eyeOpen = static_cast<float>(
+        clamp_double(eyeOpen, kSensitivityMinimum, kSensitivityMaximum));
+    parameters.mouthOpen = static_cast<float>(
+        clamp_double(mouthOpen, kSensitivityMinimum, kSensitivityMaximum));
+    parameters.mouthSmile = static_cast<float>(
+        clamp_double(mouthSmile, kSensitivityMinimum, kSensitivityMaximum));
+    parameters.brow = static_cast<float>(
+        clamp_double(brow, kSensitivityMinimum, kSensitivityMaximum));
+    parameters = VTSAppleCVASensitivityParametersSanitize(parameters);
+
+    {
+        std::lock_guard<std::mutex> lock(d->settingsMutex);
+        if (std::memcmp(&d->sensitivityParameters, &parameters,
+                        sizeof(parameters)) == 0) {
+            return;
+        }
+        d->sensitivityParameters = parameters;
+    }
+    saveSettings();
+    emit sensitivityParametersChanged();
 }
 
 void VTSController::stopVTSClient() { ::stopVTSClient(d.get()); }

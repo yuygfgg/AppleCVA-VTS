@@ -29,6 +29,17 @@ static BOOL parameterValueIDHasPrefix(NSDictionary *parameter,
            [parameterID hasPrefix:prefix];
 }
 
+static BOOL parameterValueIsSmileOutput(NSDictionary *parameter) {
+    if (![parameter isKindOfClass:NSDictionary.class]) {
+        return NO;
+    }
+    NSString *parameterID = parameter[@"id"];
+    return [parameterID isKindOfClass:NSString.class] &&
+           ([parameterID isEqualToString:@"EyeSmileLeft"] ||
+            [parameterID isEqualToString:@"EyeSmileRight"] ||
+            [parameterID isEqualToString:@"BlushWhenSmiling"]);
+}
+
 @interface VTSClient ()
 @property(nonatomic, readwrite) BOOL connected;
 @property(nonatomic, readwrite) BOOL authenticated;
@@ -103,7 +114,8 @@ static BOOL parameterValueIDHasPrefix(NSDictionary *parameter,
       for (NSDictionary *parameter in parameterValues) {
           if (parameterValueHasACVAPrefix(parameter)) {
               [customValues addObject:parameter];
-          } else if (parameterValueIDHasPrefix(parameter, @"Mouth")) {
+          } else if (parameterValueIDHasPrefix(parameter, @"Mouth") ||
+                     parameterValueIsSmileOutput(parameter)) {
               [mouthValues addObject:parameter];
           } else {
               [coreValues addObject:parameter];

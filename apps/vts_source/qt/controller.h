@@ -42,6 +42,16 @@ class VTSController final : public QObject {
                    oneEuroParametersChanged)
     Q_PROPERTY(double oneEuroDerivativeCutoff READ oneEuroDerivativeCutoff WRITE
                    setOneEuroDerivativeCutoff NOTIFY oneEuroParametersChanged)
+    Q_PROPERTY(double blinkSensitivity READ blinkSensitivity WRITE
+                   setBlinkSensitivity NOTIFY sensitivityParametersChanged)
+    Q_PROPERTY(double eyeOpenSensitivity READ eyeOpenSensitivity WRITE
+                   setEyeOpenSensitivity NOTIFY sensitivityParametersChanged)
+    Q_PROPERTY(double mouthOpenSensitivity READ mouthOpenSensitivity WRITE
+                   setMouthOpenSensitivity NOTIFY sensitivityParametersChanged)
+    Q_PROPERTY(double mouthSmileSensitivity READ mouthSmileSensitivity WRITE
+                   setMouthSmileSensitivity NOTIFY sensitivityParametersChanged)
+    Q_PROPERTY(double browSensitivity READ browSensitivity WRITE
+                   setBrowSensitivity NOTIFY sensitivityParametersChanged)
     Q_PROPERTY(QString message READ message NOTIFY statusChanged)
     Q_PROPERTY(
         QString extraStatusLine READ extraStatusLine NOTIFY statusChanged)
@@ -108,6 +118,21 @@ class VTSController final : public QObject {
     double oneEuroDerivativeCutoff() const;
     void setOneEuroDerivativeCutoff(double value);
 
+    double blinkSensitivity() const;
+    void setBlinkSensitivity(double value);
+
+    double eyeOpenSensitivity() const;
+    void setEyeOpenSensitivity(double value);
+
+    double mouthOpenSensitivity() const;
+    void setMouthOpenSensitivity(double value);
+
+    double mouthSmileSensitivity() const;
+    void setMouthSmileSensitivity(double value);
+
+    double browSensitivity() const;
+    void setBrowSensitivity(double value);
+
     QString message() const;
     QString extraStatusLine() const;
     double fps() const;
@@ -130,6 +155,7 @@ class VTSController final : public QObject {
     Q_INVOKABLE void refreshCameras();
     Q_INVOKABLE void startCalibration();
     Q_INVOKABLE void resetOneEuroParameters();
+    Q_INVOKABLE void resetSensitivityParameters();
 
   signals:
     void hostChanged();
@@ -146,6 +172,7 @@ class VTSController final : public QObject {
     void flipLandmarkYChanged();
     void topLeftOriginChanged();
     void oneEuroParametersChanged();
+    void sensitivityParametersChanged();
     void statusChanged();
     void trackingStatsChanged();
     void calibrationStateChanged();
@@ -159,6 +186,9 @@ class VTSController final : public QObject {
     void restartTrackingPipeline(bool resetCalibration);
     void applyOneEuroParameters(double minCutoff, double beta,
                                 double derivativeCutoff);
+    void applySensitivityParameters(double blink, double eyeOpen,
+                                    double mouthOpen, double mouthSmile,
+                                    double brow);
     void stopVTSClient();
     void handlePipelineStatus(const QString& message, int status);
 

@@ -36,9 +36,21 @@ typedef struct {
     float browRightYNeutral;
 } VTSAppleCVACalibration;
 
+typedef struct {
+    float blink;
+    float eyeOpen;
+    float mouthOpen;
+    float mouthSmile;
+    float brow;
+} VTSAppleCVASensitivityParameters;
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
+
+VTSAppleCVASensitivityParameters VTSAppleCVASensitivityParametersDefault(void);
+VTSAppleCVASensitivityParameters VTSAppleCVASensitivityParametersSanitize(
+    VTSAppleCVASensitivityParameters parameters);
 
 void VTSAppleCVACalibrationInit(VTSAppleCVACalibration *calibration);
 BOOL VTSAppleCVAObservedValuesFromFace(const AppleCVATrackedFace *face,
@@ -56,8 +68,10 @@ VTSAppleCVACustomParameterDefinitions(BOOL includeARKitAliases,
 NSArray<NSDictionary *> *VTSAppleCVAParameterValues(
     const AppleCVATrackedFace *face, BOOL faceFound,
     NSSet<NSString *> *availableDefaultParameters,
-    const VTSAppleCVACalibration *calibration, BOOL includeCustomParameters,
-    BOOL includeARKitAliases, BOOL includeACVABlendshapeParameters);
+    const VTSAppleCVACalibration *calibration,
+    const VTSAppleCVASensitivityParameters *sensitivityParameters,
+    BOOL includeCustomParameters, BOOL includeARKitAliases,
+    BOOL includeACVABlendshapeParameters);
 
 #ifdef __cplusplus
 }
