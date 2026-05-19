@@ -63,6 +63,7 @@ typedef int32_t (*CVAFaceTrackingLiteSetColorImageFn)(
 typedef int32_t (*CVAFaceTrackingLiteSetDetectedFacesFn)(
     CVAFaceTrackingLiteRef, uint32_t, const CVAFaceTrackingLiteDetectedFace *);
 typedef int32_t (*CVAFaceTrackingLiteProcessFn)(CVAFaceTrackingLiteRef);
+typedef void (*CVAFaceTrackingLiteProcessSecondaryFn)(CVAFaceTrackingLiteRef);
 typedef const void *(*CVAFaceTrackingLiteGetOutputFn)(CVAFaceTrackingLiteRef);
 typedef int32_t (*CVAFaceTrackingLiteCopyDecodedOutputFn)(const void *,
                                                           CFDictionaryRef *,
@@ -87,6 +88,7 @@ typedef struct {
     CVAFaceTrackingLiteSetColorImageFn set_color_image;
     CVAFaceTrackingLiteSetDetectedFacesFn set_detected_faces;
     CVAFaceTrackingLiteProcessFn process;
+    CVAFaceTrackingLiteProcessSecondaryFn process_secondary;
     CVAFaceTrackingLiteGetOutputFn get_output;
     CVAFaceTrackingLiteCopyDecodedOutputFn copy_decoded_output;
     CVAFaceTrackingCopySemanticsFn copy_semantics;
@@ -242,6 +244,8 @@ static bool load_api(AppleCVALiteAPI *api) {
         APPLECVA_LITE_SYMBOL(set_detected_faces,
                              "CVAFaceTrackingLiteSetDetectedFaces"),
         APPLECVA_LITE_SYMBOL(process, "CVAFaceTrackingLiteProcess"),
+        APPLECVA_LITE_SYMBOL(process_secondary,
+                             "CVAFaceTrackingLiteProcessSecondary"),
         APPLECVA_LITE_SYMBOL(get_output, "CVAFaceTrackingLiteGetOutput"),
         APPLECVA_LITE_SYMBOL(copy_decoded_output,
                              "CVAFaceTrackingLiteCopyDecodedOutput"),
@@ -1005,6 +1009,17 @@ copy_raw_decoded_output_internal(AppleCVATracker *tracker,
     return APPLECVA_OK;
 }
 
+static void process_lite_secondary_if_requested(AppleCVATracker *tracker,
+                                                bool aux_flag) {
+    if (!aux_flag) {
+        return;
+    }
+
+    trace_log("process_secondary requested");
+    tracker->api.process_secondary(tracker->tracker);
+    trace_log("process_secondary complete");
+}
+
 uint32_t AppleCVAMaximumTrackedFaces(void) {
     AppleCVALiteAPI api;
     if (!load_api(&api)) {
@@ -1404,8 +1419,10 @@ process_frame_lite_api(AppleCVATracker *tracker, CVPixelBufferRef input_buffer,
 
     fill_frame_result_from_output(decoded_output, out_result);
 
+    const bool should_process_secondary = out_result->aux_flag;
     CFRelease(decoded_output);
     tracker->last_output_backend_mode = APPLECVA_BACKEND_MODE_LITE;
+    process_lite_secondary_if_requested(tracker, should_process_secondary);
     return APPLECVA_OK;
 }
 
