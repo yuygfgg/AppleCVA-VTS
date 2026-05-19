@@ -335,6 +335,13 @@ ApplicationWindow {
                             onMoved: controller.oneEuroDerivativeCutoff = value
                         }
 
+                        VTSButton {
+                            text: "Reset Filter Parameters"
+                            Layout.fillWidth: true
+                            Layout.topMargin: 4
+                            onClicked: controller.resetOneEuroParameters()
+                        }
+
                     }
 
                     Card {

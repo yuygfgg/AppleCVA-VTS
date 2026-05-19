@@ -752,6 +752,13 @@ void VTSController::startCalibration() {
     emit statusChanged();
 }
 
+void VTSController::resetOneEuroParameters() {
+    const AppleCVAOneEuroParameters defaults =
+        AppleCVAOneEuroParametersDefault();
+    applyOneEuroParameters(defaults.min_cutoff, defaults.beta,
+                           defaults.derivative_cutoff);
+}
+
 void VTSController::loadSettings() {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     NSString *host = [defaults stringForKey:kDefaultsHostKey];

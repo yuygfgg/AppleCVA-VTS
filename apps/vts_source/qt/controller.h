@@ -129,6 +129,7 @@ class VTSController final : public QObject {
     Q_INVOKABLE void setCameraIndex(int index);
     Q_INVOKABLE void refreshCameras();
     Q_INVOKABLE void startCalibration();
+    Q_INVOKABLE void resetOneEuroParameters();
 
   signals:
     void hostChanged();
